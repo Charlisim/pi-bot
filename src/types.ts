@@ -67,6 +67,36 @@ export interface RunRecord {
   updatedAt: string;
 }
 
+export type ConversationKind = "bot" | "channel";
+export type ConversationMessageStatus = "pending" | "completed" | "failed";
+
+export interface ConversationMessage {
+  id: string;
+  author: "user" | "bot";
+  botId?: string;
+  content: string;
+  status: ConversationMessageStatus;
+  runId?: string;
+  responseId?: string;
+  createdAt: string;
+}
+
+export interface ConversationContext {
+  botId: string;
+  runId: string;
+  profileDigest?: string;
+}
+
+export interface Conversation {
+  id: string;
+  kind: ConversationKind;
+  targetId: string;
+  messages: ConversationMessage[];
+  contexts: ConversationContext[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Workspace {
   schemaVersion: 1;
   name: string;
@@ -75,6 +105,7 @@ export interface Workspace {
   bots: BotProfile[];
   channels: Channel[];
   runs: RunRecord[];
+  conversations: Conversation[];
   createdAt: string;
   updatedAt: string;
 }

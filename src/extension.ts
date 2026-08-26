@@ -1,23 +1,46 @@
+import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { runtimeAgentName } from "./agent.ts";
 import { publishWorkspaceAgents, stageWorkspaceAgents } from "./agent-files.ts";
 import {
-  BotDetails,
-  ChannelDetails,
+  applyConversationReply,
+  botProfileDigest,
+  busyConversationRecipients,
+  channelRecipients,
+  channelTask,
+  conversationContextRunId,
+  conversationId,
+  ensureConversation,
+  findConversation,
+  reconcileConversationRun,
+} from "./conversations.ts";
+import {
+  ConversationView,
+  type ConversationViewAction,
   Dashboard,
   type DashboardAction,
   RunDetails,
 } from "./dashboard.ts";
-import { loadWorkspace, saveWorkspace } from "./store.ts";
+import {
+  loadWorkspace,
+  MAX_ACTIVE_RUNS,
+  prepareConversationResponse,
+  readConversationResponse,
+  removeConversationResponse,
+  retainRuns,
+  saveWorkspace,
+} from "./store.ts";
 import { type CompletionEvent, SubagentsClient } from "./subagents.ts";
 import { classifyAuthority } from "./tools.ts";
 import type {
   BotProfile,
+  ConversationKind,
   RunRecord,
   Workspace,
   WorkspaceSnapshot,
@@ -57,7 +80,9 @@ export default function piBotExtension(pi: ExtensionAPI) {
   let workspace: Workspace | undefined;
   let mutationQueue: Promise<void> = Promise.resolve();
   let pendingRunReceipts = 0;
-  const earlyCompletions = new Map<string, CompletionEvent["status"]>();
+  let activeConversationRender: (() => void) | undefined;
+  const earlyCompletions = new Map<string, CompletionEvent>();
+  const pendingResponseIds = new Map<string, string>();
   const client = new SubagentsClient(pi.events);
 
   const updateSurface = () => {
@@ -98,6 +123,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
 
   const persistWorkspace = async (candidate: Workspace) => {
     if (!ctx) throw new Error("Pi Bot has no active session.");
+    candidate.runs = retainRuns(candidate.runs);
     const previous = workspace ? cloneWorkspace(workspace) : undefined;
     const botsChanged =
       !previous ||
@@ -215,6 +241,15 @@ export default function piBotExtension(pi: ExtensionAPI) {
     ctx.ui.notify(`#${channel.name} created.`, "info");
   };
 
+  const assertRunCapacity = () => {
+    if (
+      workspace &&
+      workspace.runs.filter((run) => run.status === "launched").length >=
+        MAX_ACTIVE_RUNS
+    )
+      throw new Error(`At most ${MAX_ACTIVE_RUNS} runs can remain active.`);
+  };
+
   const runBot = async (
     botId: string,
     providedTask?: string,
@@ -235,6 +270,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
       );
       if (!confirmed) return undefined;
     }
+    assertRunCapacity();
     pendingRunReceipts += 1;
     let runId: string | undefined;
     try {
@@ -255,7 +291,8 @@ export default function piBotExtension(pi: ExtensionAPI) {
       };
       try {
         await mutateWorkspace((candidate) => {
-          run.status = earlyCompletions.get(launchedRunId) ?? "launched";
+          run.status =
+            earlyCompletions.get(launchedRunId)?.status ?? "launched";
           earlyCompletions.delete(launchedRunId);
           candidate.runs.push(run);
         });
@@ -277,40 +314,301 @@ export default function piBotExtension(pi: ExtensionAPI) {
     }
   };
 
-  const inspectBot = async (botId: string) => {
+  const launchConversationReply = async (
+    threadId: string,
+    bot: BotProfile,
+    task: string,
+    runtimeTask: string,
+  ): Promise<void> => {
     if (!ctx || !workspace) return;
-    const bot = workspace.bots.find((item) => item.id === botId);
-    if (!bot) throw new Error(`Unknown bot: ${botId}`);
-    const channelNames = workspace.channels
-      .filter((channel) => bot.channelIds.includes(channel.id))
-      .map((channel) => `#${channel.name}`)
-      .join(", ");
-    if (ctx.mode !== "tui") {
-      ctx.ui.notify(`${bot.name} — ${bot.role}\n${bot.description}`, "info");
-      return;
-    }
-    await ctx.ui.custom<void>(
-      (_tui, theme, _keybindings, done) =>
-        new BotDetails(bot, channelNames, theme, () => done(undefined)),
+    const conversation = workspace.conversations.find(
+      (item) => item.id === threadId,
     );
+    if (!conversation) throw new Error(`Unknown conversation: ${threadId}`);
+    const profileDigest = botProfileDigest(bot);
+    const storedContext = conversation.contexts.find(
+      (context) => context.botId === bot.id,
+    );
+    const previousRunId = conversationContextRunId(conversation, bot);
+    if (
+      previousRunId &&
+      workspace.runs.find((run) => run.id === previousRunId)?.status ===
+        "launched"
+    )
+      throw new Error(`${bot.name} is still replying to the prior message.`);
+
+    const projectPath = workspace.projectPath;
+    const cwd = ctx.cwd;
+    const responseId = randomUUID();
+    const responsePath = await prepareConversationResponse(cwd, responseId);
+    const spawn = (message: string) =>
+      client.spawn({
+        agent: runtimeAgentName(projectPath, bot.id),
+        task: message,
+        cwd,
+        output: responsePath,
+      });
+    const lastUserIndex = conversation.messages.findLastIndex(
+      (message) => message.author === "user",
+    );
+    const history = conversation.messages
+      .slice(0, lastUserIndex)
+      .filter(
+        (message) =>
+          message.status === "completed" &&
+          (message.author === "user" || message.botId === bot.id),
+      )
+      .map(
+        (message) =>
+          `${message.author === "user" ? "User" : bot.name}: ${message.content}`,
+      )
+      .join("\n\n")
+      .slice(-(64 * 1_024));
+    const historyTask = history
+      ? `Continue this existing conversation.\n\n${history}\n\n${runtimeTask}`
+      : runtimeTask;
+    assertRunCapacity();
+    pendingRunReceipts += 1;
+    let runId: string | undefined;
+    try {
+      runId =
+        previousRunId && (await client.resumeAvailable(previousRunId))
+          ? await client.resume(previousRunId, runtimeTask, responsePath)
+          : await spawn(storedContext ? historyTask : runtimeTask);
+      const launchedRunId = runId;
+      pendingResponseIds.set(launchedRunId, responseId);
+      const now = new Date().toISOString();
+      let earlyCompletion: CompletionEvent | undefined;
+      try {
+        await mutateWorkspace((candidate) => {
+          earlyCompletion = earlyCompletions.get(launchedRunId);
+          const thread = candidate.conversations.find(
+            (item) => item.id === threadId,
+          );
+          if (!thread) throw new Error(`Unknown conversation: ${threadId}`);
+          const contextIndex = thread.contexts.findIndex(
+            (context) => context.botId === bot.id,
+          );
+          const context = {
+            botId: bot.id,
+            runId: launchedRunId,
+            profileDigest,
+          };
+          if (contextIndex === -1) thread.contexts.push(context);
+          else thread.contexts[contextIndex] = context;
+          thread.messages.push({
+            id: randomUUID(),
+            author: "bot",
+            botId: bot.id,
+            content: "Thinking…",
+            status: "pending",
+            runId: launchedRunId,
+            responseId,
+            createdAt: now,
+          });
+          thread.updatedAt = now;
+          candidate.runs.push({
+            id: launchedRunId,
+            botId: bot.id,
+            task,
+            status: earlyCompletion?.status ?? "launched",
+            createdAt: now,
+            updatedAt: now,
+          });
+          earlyCompletions.delete(launchedRunId);
+        });
+        if (earlyCompletion) await handleCompletion(earlyCompletion);
+      } catch (error) {
+        try {
+          await client.stop(launchedRunId);
+        } catch (stopError) {
+          throw new Error(
+            `Run ${launchedRunId} may still be active because its receipt could not be saved and stop failed: ${stopError instanceof Error ? stopError.message : String(stopError)}`,
+          );
+        }
+        throw error;
+      }
+    } catch (error) {
+      if (runId) pendingResponseIds.delete(runId);
+      await removeConversationResponse(cwd, responseId);
+      throw error;
+    } finally {
+      pendingRunReceipts -= 1;
+      if (runId) earlyCompletions.delete(runId);
+    }
   };
 
-  const inspectChannel = async (channelId: string) => {
+  const sendConversationMessage = async (
+    kind: ConversationKind,
+    targetId: string,
+    input: string,
+  ): Promise<void> => {
     if (!ctx || !workspace) return;
-    const channel = workspace.channels.find((item) => item.id === channelId);
-    if (!channel) throw new Error(`Unknown channel: ${channelId}`);
-    const botNames = workspace.bots
-      .filter((bot) => bot.channelIds.includes(channel.id))
-      .map((bot) => bot.name)
-      .join(", ");
-    if (ctx.mode !== "tui") {
-      ctx.ui.notify(`#${channel.name}\n${channel.topic}`, "info");
+    const content = input.trim();
+    if (!content) return;
+    if (content.length > MAX_TASK_LENGTH)
+      throw new Error(`Message must be at most ${MAX_TASK_LENGTH} characters.`);
+
+    const bot =
+      kind === "bot"
+        ? workspace.bots.find((item) => item.id === targetId)
+        : undefined;
+    const channel =
+      kind === "channel"
+        ? workspace.channels.find((item) => item.id === targetId)
+        : undefined;
+    if (kind === "bot" && !bot) throw new Error(`Unknown bot: ${targetId}`);
+    if (kind === "channel" && !channel)
+      throw new Error(`Unknown channel: ${targetId}`);
+    const recipients = bot
+      ? [bot]
+      : channelRecipients(workspace.bots, targetId, content);
+    const busy = busyConversationRecipients(
+      workspace,
+      kind,
+      targetId,
+      recipients,
+    );
+    if (busy.length > 0)
+      throw new Error(
+        `Wait for the current reply from: ${busy.map((recipient) => recipient.name).join(", ")}.`,
+      );
+    const elevated = recipients.filter(
+      (recipient) => classifyAuthority(recipient.tools) === "elevated",
+    );
+    if (elevated.length > 0) {
+      const confirmed = await ctx.ui.confirm(
+        "Send message to bots with elevated tools?",
+        elevated.map((recipient) => recipient.name).join(", "),
+      );
+      if (!confirmed) return;
+    }
+
+    const now = new Date().toISOString();
+    const threadId = conversationId(kind, targetId);
+    await mutateWorkspace((candidate) => {
+      const conversation = ensureConversation(candidate, kind, targetId, now);
+      conversation.messages.push({
+        id: randomUUID(),
+        author: "user",
+        content,
+        status: "completed",
+        createdAt: now,
+      });
+      conversation.updatedAt = now;
+    });
+    if (recipients.length === 0) {
+      ctx.ui.notify(
+        "Message saved. No bots are assigned to this channel.",
+        "info",
+      );
       return;
     }
-    await ctx.ui.custom<void>(
-      (_tui, theme, _keybindings, done) =>
-        new ChannelDetails(channel, botNames, theme, () => done(undefined)),
-    );
+
+    const runtimeTask = channel
+      ? channelTask(channel.name, recipients.length, content)
+      : content;
+    for (const recipient of recipients) {
+      try {
+        await launchConversationReply(
+          threadId,
+          recipient,
+          content,
+          runtimeTask,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failedAt = new Date().toISOString();
+        await mutateWorkspace((candidate) => {
+          const conversation = ensureConversation(
+            candidate,
+            kind,
+            targetId,
+            failedAt,
+          );
+          conversation.messages.push({
+            id: randomUUID(),
+            author: "bot",
+            botId: recipient.id,
+            content: message,
+            status: "failed",
+            createdAt: failedAt,
+          });
+          conversation.updatedAt = failedAt;
+        });
+        ctx.ui.notify(`${recipient.name}: ${message}`, "error");
+      }
+    }
+  };
+
+  const openConversation = async (
+    kind: ConversationKind,
+    targetId: string,
+  ): Promise<void> => {
+    if (!ctx || !workspace) return;
+    if (ctx.mode !== "tui") {
+      const conversation = findConversation(workspace, kind, targetId);
+      const text = conversation?.messages
+        .map((message) =>
+          stripTerminalSequences(
+            `${message.author === "user" ? "You" : message.botId}: ${message.content}`,
+          ),
+        )
+        .join("\n\n");
+      ctx.ui.notify(text || "No messages yet.", "info");
+      return;
+    }
+    while (ctx && workspace) {
+      const bot =
+        kind === "bot"
+          ? workspace.bots.find((item) => item.id === targetId)
+          : undefined;
+      const channel =
+        kind === "channel"
+          ? workspace.channels.find((item) => item.id === targetId)
+          : undefined;
+      if (kind === "bot" && !bot) throw new Error(`Unknown bot: ${targetId}`);
+      if (kind === "channel" && !channel)
+        throw new Error(`Unknown channel: ${targetId}`);
+      const title = bot?.name ?? `#${channel?.name ?? targetId}`;
+      const assigned = channel
+        ? workspace.bots.filter((item) => item.channelIds.includes(channel.id))
+        : [];
+      const subtitle = bot
+        ? `${bot.role} · ${bot.description}`
+        : `${channel?.topic ?? ""}${assigned.length ? ` · ${assigned.map((item) => `@${item.id}`).join(", ")}` : " · no bots assigned"}`;
+      const botNames = new Map(
+        workspace.bots.map((item) => [item.id, item.name]),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      let action: ConversationViewAction | undefined;
+      try {
+        action = await ctx.ui.custom<ConversationViewAction>(
+          (tui, theme, _keybindings, done) => {
+            activeConversationRender = () => tui.requestRender();
+            return new ConversationView(
+              title,
+              subtitle,
+              () =>
+                workspace
+                  ? findConversation(workspace, kind, targetId)
+                  : undefined,
+              botNames,
+              theme,
+              done,
+              () => tui.requestRender(),
+            );
+          },
+        );
+      } finally {
+        activeConversationRender = undefined;
+      }
+      if (!action || action === "close") break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const message = await ctx.ui.editor(`Message ${title}`, "");
+      if (message?.trim())
+        await sendConversationMessage(kind, targetId, message);
+    }
   };
 
   const inspectRun = async (runId: string) => {
@@ -338,32 +636,49 @@ export default function piBotExtension(pi: ExtensionAPI) {
 
   const handleCompletion = async (event: CompletionEvent) => {
     if (!ctx) return;
+    const responseId =
+      pendingResponseIds.get(event.runId) ??
+      workspace?.conversations
+        .flatMap((conversation) => conversation.messages)
+        .find((message) => message.runId === event.runId)?.responseId;
+    let completion = event;
     let updated = false;
     try {
+      if (responseId) {
+        const output = await readConversationResponse(ctx.cwd, responseId);
+        if (output) completion = { ...event, output };
+      }
       await serializeMutation(async () => {
         if (!workspace) return;
         const index = workspace.runs.findIndex((run) => run.id === event.runId);
         if (index === -1) {
-          if (pendingRunReceipts > 0)
-            earlyCompletions.set(event.runId, event.status);
+          if (pendingRunReceipts > 0) earlyCompletions.set(event.runId, event);
           return;
         }
         const candidate = cloneWorkspace(workspace);
         const currentRun = candidate.runs[index];
         if (!currentRun) return;
+        const now = new Date().toISOString();
         candidate.runs[index] = {
           ...currentRun,
           status: event.status,
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
         };
+        applyConversationReply(candidate, completion, now);
         await persistWorkspace(candidate);
         updated = true;
       });
-      if (updated)
+      if (updated) {
+        if (responseId) {
+          await removeConversationResponse(ctx.cwd, responseId);
+          pendingResponseIds.delete(event.runId);
+        }
+        activeConversationRender?.();
         ctx.ui.notify(
           `Run ${event.runId} ${event.status}.`,
           event.status === "failed" ? "error" : "info",
         );
+      }
     } catch (error) {
       ctx.ui.notify(
         `Could not save completion for ${event.runId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -402,9 +717,10 @@ export default function piBotExtension(pi: ExtensionAPI) {
         else if (action.type === "delete-bot") await deleteBot(action.botId);
         else if (action.type === "create-channel") await createChannel();
         else if (action.type === "run-bot") await runBot(action.botId);
-        else if (action.type === "inspect-bot") await inspectBot(action.botId);
+        else if (action.type === "inspect-bot")
+          await openConversation("bot", action.botId);
         else if (action.type === "inspect-channel")
-          await inspectChannel(action.channelId);
+          await openConversation("channel", action.channelId);
         else if (action.type === "inspect-run") await inspectRun(action.runId);
       } catch (error) {
         ctx.ui.notify(
@@ -444,29 +760,55 @@ export default function piBotExtension(pi: ExtensionAPI) {
       }
     }
     const engineReady = await client.probe();
-    if (
-      engineReady &&
-      workspace?.runs.some((run) => run.status === "launched")
-    ) {
+    if (workspace?.runs.some((run) => run.status === "launched")) {
       try {
-        const statuses = await client.statuses();
+        const statuses = engineReady ? await client.statuses() : new Map();
+        const recovered = new Map<
+          string,
+          { responseId: string; output: string }
+        >();
+        for (const conversation of workspace.conversations) {
+          for (const message of conversation.messages) {
+            if (
+              message.status !== "pending" ||
+              !message.runId ||
+              !message.responseId
+            )
+              continue;
+            const output = await readConversationResponse(
+              context.cwd,
+              message.responseId,
+            );
+            if (output)
+              recovered.set(message.runId, {
+                responseId: message.responseId,
+                output,
+              });
+          }
+        }
         await serializeMutation(async () => {
           if (!workspace) return;
           const candidate = cloneWorkspace(workspace);
           let changed = false;
           for (const run of candidate.runs) {
+            const recovery = recovered.get(run.id);
             const status = statuses.get(run.id) ?? "unknown";
-            if (run.status === "launched" && status !== "launched") {
-              run.status = status;
-              run.updatedAt = new Date().toISOString();
-              changed = true;
-            }
+            changed =
+              reconcileConversationRun(
+                candidate,
+                run.id,
+                status,
+                recovery?.output,
+                new Date().toISOString(),
+              ) || changed;
           }
           if (changed) {
             await saveWorkspace(context.cwd, candidate);
             workspace = candidate;
           }
         });
+        for (const recovery of recovered.values())
+          await removeConversationResponse(context.cwd, recovery.responseId);
       } catch (error) {
         context.ui.notify(
           `Pi Bot could not reconcile prior runs. Saved bots remain available: ${error instanceof Error ? error.message : String(error)}`,

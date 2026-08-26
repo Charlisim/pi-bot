@@ -26,7 +26,7 @@ Pi Bot reduces accidental authority by:
 - Denying recursive orchestration tools.
 - Separating generated behavior text from runtime capabilities.
 - Confirming elevated tools before each run.
-- Storing state outside repositories with restrictive permissions.
-- Avoiding credentials, transcripts, and tool output in its state. Profile text and task receipts are stored verbatim and must not contain secrets.
+- Storing state and recoverable response files outside repositories with restrictive permissions.
+- Avoiding credentials, raw transcripts, and tool output in its state. Profiles, task receipts, conversation messages, and final bot responses are stored verbatim and must not contain secrets.
 
 Users remain responsible for the models, tools, extensions, repositories, and credentials they enable.

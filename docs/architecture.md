@@ -19,13 +19,13 @@ Pi Bot is one Pi extension with three boundaries.
 
 ## Workspace store
 
-The store owns user-created profiles, channels, and bounded run receipts. It does not own subagent transcripts or artifacts.
+The store owns user-created profiles, channels, bounded run receipts, and local conversation history. Conversation history contains human messages and final bot responses. It does not contain raw subagent transcripts, tool output, or artifacts.
 
 Properties:
 
 - One state file per canonical project path.
 - Schema version 1.
-- Maximum 1 MiB.
+- Maximum 16 MiB and 10,000 conversation messages per project.
 - Regular files only.
 - Mode `0600` on supported systems.
 - Atomic temporary write, file sync, rename, and directory sync.
@@ -67,7 +67,9 @@ subagents:rpc:v1:ready
 subagent:async-complete
 ```
 
-Requests subscribe to the correlated reply before they emit. Timeouts and shutdown remove listeners. Launches are detached and asynchronous.
+Requests subscribe to the correlated reply before they emit. Timeouts and shutdown remove listeners. Launches are detached and asynchronous. Direct conversations and each bot lane in a channel keep the latest run ID and a digest of the effective bot profile. Pi Bot resumes only when that digest still matches. A fresh run receives saved history when the prior run is definitively unavailable or the profile changed.
+
+Each conversation launch writes its final response to a private package-owned response file. Pi Bot folds that response into the atomic workspace state and removes the file. This lets startup reconciliation recover a completed response that arrived while the TUI was unavailable.
 
 Detailed run state, artifacts, cancellation, steering, and recovery remain owned by pi-subagents.
 
@@ -80,6 +82,6 @@ Tool authority comes from an explicit human selection. Pi Bot denies recursive o
 ## Known limits
 
 - Tool restrictions are not an OS sandbox.
-- Detached runs can outlive the owning Pi session. Completion UI may not survive that shutdown; unreconciled receipts are marked `unknown` on the next session instead of claiming success or failure.
+- Detached runs can outlive the owning Pi session. Startup reconciliation recovers a saved final response when the child wrote one. It keeps the receipt pending when neither a terminal status nor a response file proves completion.
 - A configured model name is resolved by pi-subagents at launch.
-- Local channels are organizational labels in version 0.1. They are not external chat transports.
+- Local channels are persistent project conversations. They are not external chat transports.

@@ -14,6 +14,8 @@ import { validateToolName } from "./tools.ts";
 import {
   type BotProfile,
   type Channel,
+  type Conversation,
+  type ConversationMessage,
   type RunRecord,
   THINKING_LEVELS,
   type Workspace,
@@ -24,7 +26,11 @@ const MAX_LONG_TEXT = 8_192;
 const MAX_BOTS = 100;
 const MAX_CHANNELS = 100;
 const MAX_RUNS = 100;
-const MAX_STATE_BYTES = 1024 * 1024;
+export const MAX_ACTIVE_RUNS = MAX_RUNS;
+const MAX_CONVERSATIONS = MAX_BOTS + MAX_CHANNELS;
+const MAX_CONVERSATION_MESSAGES = 10_000;
+const MAX_MESSAGE_TEXT = 1_024 * 1_024;
+const MAX_STATE_BYTES = 16 * 1_024 * 1_024;
 const saveQueues = new Map<string, Promise<void>>();
 
 function nonEmptyString(
@@ -205,6 +211,112 @@ function parseBot(value: unknown, index: number): BotProfile {
   };
 }
 
+function parseConversationMessage(
+  value: unknown,
+  conversationIndex: number,
+  messageIndex: number,
+): ConversationMessage {
+  const field = `conversations[${conversationIndex}].messages[${messageIndex}]`;
+  const input = record(value, field);
+  const author = nonEmptyString(input.author, `${field}.author`);
+  if (author !== "user" && author !== "bot")
+    throw new Error(`${field}.author is invalid.`);
+  const status = nonEmptyString(input.status, `${field}.status`);
+  if (!(["pending", "completed", "failed"] as const).includes(status as never))
+    throw new Error(`${field}.status is invalid.`);
+  const parsedBotId = optionalString(input.botId, `${field}.botId`, 64);
+  if (author === "bot" && !parsedBotId)
+    throw new Error(`${field}.botId is required for bot messages.`);
+  if (author === "user" && parsedBotId)
+    throw new Error(`${field}.botId is not allowed for user messages.`);
+  const runId = optionalString(input.runId, `${field}.runId`, 128);
+  const responseId = optionalString(
+    input.responseId,
+    `${field}.responseId`,
+    36,
+  );
+  if (responseId && !/^[0-9a-f-]{36}$/.test(responseId))
+    throw new Error(`${field}.responseId is invalid.`);
+  if (status === "pending" && (author !== "bot" || !runId || !responseId))
+    throw new Error(`${field} pending messages require a bot and run ID.`);
+  return {
+    id: nonEmptyString(input.id, `${field}.id`, 128),
+    author,
+    ...(parsedBotId ? { botId: botId(parsedBotId, `${field}.botId`) } : {}),
+    content: nonEmptyString(
+      input.content,
+      `${field}.content`,
+      MAX_MESSAGE_TEXT,
+    ),
+    status: status as ConversationMessage["status"],
+    ...(runId ? { runId } : {}),
+    ...(responseId ? { responseId } : {}),
+    createdAt: isoDate(input.createdAt, `${field}.createdAt`),
+  };
+}
+
+function parseConversation(value: unknown, index: number): Conversation {
+  const field = `conversations[${index}]`;
+  const input = record(value, field);
+  const kind = nonEmptyString(input.kind, `${field}.kind`);
+  if (kind !== "bot" && kind !== "channel")
+    throw new Error(`${field}.kind is invalid.`);
+  if (
+    !Array.isArray(input.messages) ||
+    input.messages.length > MAX_CONVERSATION_MESSAGES
+  )
+    throw new Error(
+      `${field}.messages must contain at most ${MAX_CONVERSATION_MESSAGES} items.`,
+    );
+  if (!Array.isArray(input.contexts) || input.contexts.length > MAX_BOTS)
+    throw new Error(
+      `${field}.contexts must contain at most ${MAX_BOTS} items.`,
+    );
+  const contexts = input.contexts.map((value, contextIndex) => {
+    const contextField = `${field}.contexts[${contextIndex}]`;
+    const context = record(value, contextField);
+    const profileDigest = optionalString(
+      context.profileDigest,
+      `${contextField}.profileDigest`,
+      64,
+    );
+    if (profileDigest && !/^[0-9a-f]{64}$/.test(profileDigest))
+      throw new Error(`${contextField}.profileDigest is invalid.`);
+    return {
+      botId: botId(context.botId, `${contextField}.botId`),
+      runId: nonEmptyString(context.runId, `${contextField}.runId`, 128),
+      ...(profileDigest ? { profileDigest } : {}),
+    };
+  });
+  if (
+    new Set(contexts.map((context) => context.botId)).size !== contexts.length
+  )
+    throw new Error(`${field}.contexts must have unique bot IDs.`);
+  const id = nonEmptyString(input.id, `${field}.id`, 160);
+  const targetId = nonEmptyString(input.targetId, `${field}.targetId`, 64);
+  if (id !== `${kind}:${targetId}`)
+    throw new Error(`${field}.id must match its kind and target ID.`);
+  const messages = input.messages.map((message, messageIndex) =>
+    parseConversationMessage(message, index, messageIndex),
+  );
+  if (new Set(messages.map((message) => message.id)).size !== messages.length)
+    throw new Error(`${field}.messages must have unique IDs.`);
+  const messageRunIds = messages.flatMap((message) =>
+    message.runId ? [message.runId] : [],
+  );
+  if (new Set(messageRunIds).size !== messageRunIds.length)
+    throw new Error(`${field}.messages must have unique run IDs.`);
+  return {
+    id,
+    kind,
+    targetId,
+    messages,
+    contexts,
+    createdAt: isoDate(input.createdAt, `${field}.createdAt`),
+    updatedAt: isoDate(input.updatedAt, `${field}.updatedAt`),
+  };
+}
+
 function parseRun(value: unknown, index: number): RunRecord {
   const input = record(value, `runs[${index}]`);
   const status = nonEmptyString(input.status, `runs[${index}].status`);
@@ -239,6 +351,11 @@ export function parseWorkspace(value: unknown): Workspace {
     throw new Error(`channels must contain at most ${MAX_CHANNELS} items.`);
   if (!Array.isArray(input.runs) || input.runs.length > MAX_RUNS)
     throw new Error(`runs must contain at most ${MAX_RUNS} items.`);
+  const conversations = input.conversations ?? [];
+  if (!Array.isArray(conversations) || conversations.length > MAX_CONVERSATIONS)
+    throw new Error(
+      `conversations must contain at most ${MAX_CONVERSATIONS} items.`,
+    );
   const workspace: Workspace = {
     schemaVersion: 1,
     name: nonEmptyString(input.name, "name", 80),
@@ -250,6 +367,7 @@ export function parseWorkspace(value: unknown): Workspace {
     bots: input.bots.map(parseBot),
     channels: input.channels.map(parseChannel),
     runs: input.runs.map(parseRun),
+    conversations: conversations.map(parseConversation),
     createdAt: isoDate(input.createdAt, "createdAt"),
     updatedAt: isoDate(input.updatedAt, "updatedAt"),
   };
@@ -262,6 +380,29 @@ export function parseWorkspace(value: unknown): Workspace {
     workspace.channels.length
   )
     throw new Error("Channel IDs must be unique.");
+  if (
+    new Set(workspace.runs.map((run) => run.id)).size !== workspace.runs.length
+  )
+    throw new Error("Run IDs must be unique.");
+  if (
+    new Set(workspace.conversations.map((conversation) => conversation.id))
+      .size !== workspace.conversations.length
+  )
+    throw new Error("Conversation IDs must be unique.");
+  const conversationKeys = workspace.conversations.map(
+    (conversation) => `${conversation.kind}:${conversation.targetId}`,
+  );
+  if (new Set(conversationKeys).size !== conversationKeys.length)
+    throw new Error("Each bot or channel can have only one conversation.");
+  if (
+    workspace.conversations.reduce(
+      (count, conversation) => count + conversation.messages.length,
+      0,
+    ) > MAX_CONVERSATION_MESSAGES
+  )
+    throw new Error(
+      `conversations must contain at most ${MAX_CONVERSATION_MESSAGES} total messages.`,
+    );
   const channelIds = new Set(workspace.channels.map((channel) => channel.id));
   if (
     workspace.bots.some((bot) =>
@@ -287,6 +428,84 @@ export function workspacePath(cwd: string, root = storeRoot()): string {
   return join(root, digest, "workspace.json");
 }
 
+function responseFileName(responseId: string): string {
+  if (!/^[0-9a-f-]{36}$/.test(responseId))
+    throw new Error("Conversation response ID is invalid.");
+  return `${responseId}.txt`;
+}
+
+export async function prepareConversationResponse(
+  cwd: string,
+  responseId: string,
+  root = storeRoot(),
+): Promise<string> {
+  const workspaceDirectory = dirname(workspacePath(cwd, root));
+  const directory = join(workspaceDirectory, "responses");
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const rootMetadata = await lstat(root);
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory())
+    throw new Error("Pi Bot state root must be a real directory.");
+  await mkdir(workspaceDirectory, { recursive: true, mode: 0o700 });
+  const workspaceMetadata = await lstat(workspaceDirectory);
+  if (workspaceMetadata.isSymbolicLink() || !workspaceMetadata.isDirectory())
+    throw new Error("Pi Bot state directory must be a real directory.");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryMetadata = await lstat(directory);
+  if (directoryMetadata.isSymbolicLink() || !directoryMetadata.isDirectory())
+    throw new Error("Pi Bot response directory must be a real directory.");
+  await chmod(root, 0o700);
+  await chmod(workspaceDirectory, 0o700);
+  await chmod(directory, 0o700);
+  const path = join(directory, responseFileName(responseId));
+  try {
+    await lstat(path);
+    throw new Error("Conversation response file already exists.");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return path;
+}
+
+export async function readConversationResponse(
+  cwd: string,
+  responseId: string,
+  root = storeRoot(),
+): Promise<string | undefined> {
+  const path = join(
+    dirname(workspacePath(cwd, root)),
+    "responses",
+    responseFileName(responseId),
+  );
+  try {
+    const metadata = await lstat(path);
+    if (metadata.isSymbolicLink() || !metadata.isFile())
+      throw new Error("Pi Bot response must be a regular file.");
+    if (metadata.size > MAX_MESSAGE_TEXT)
+      throw new Error(`Pi Bot response exceeds ${MAX_MESSAGE_TEXT} bytes.`);
+    await chmod(path, 0o600);
+    const content = (await readFile(path, "utf8")).replaceAll("\0", "�").trim();
+    return content || undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+export async function removeConversationResponse(
+  cwd: string,
+  responseId: string,
+  root = storeRoot(),
+): Promise<void> {
+  const path = join(
+    dirname(workspacePath(cwd, root)),
+    "responses",
+    responseFileName(responseId),
+  );
+  await unlink(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}
+
 export async function loadWorkspace(
   cwd: string,
   root = storeRoot(),
@@ -307,6 +526,22 @@ export async function loadWorkspace(
   }
 }
 
+export function retainRuns(runs: readonly RunRecord[]): RunRecord[] {
+  const launched = runs.filter((run) => run.status === "launched");
+  if (launched.length > MAX_ACTIVE_RUNS)
+    throw new Error(`At most ${MAX_ACTIVE_RUNS} runs can remain active.`);
+  const terminalCapacity = MAX_RUNS - launched.length;
+  const terminalRuns = runs.filter((run) => run.status !== "launched");
+  const terminalToKeep = new Set(
+    (terminalCapacity > 0 ? terminalRuns.slice(-terminalCapacity) : []).map(
+      (run) => run.id,
+    ),
+  );
+  return runs.filter(
+    (run) => run.status === "launched" || terminalToKeep.has(run.id),
+  );
+}
+
 async function performSave(
   cwd: string,
   workspace: Workspace,
@@ -317,7 +552,7 @@ async function performSave(
     ...workspace,
     projectPath: resolve(cwd),
     updatedAt: new Date().toISOString(),
-    runs: workspace.runs.slice(-MAX_RUNS),
+    runs: retainRuns(workspace.runs),
   });
   const directory = dirname(path);
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -394,6 +629,7 @@ export function createWorkspace(
       },
     ],
     runs: [],
+    conversations: [],
     createdAt,
     updatedAt: createdAt,
   };

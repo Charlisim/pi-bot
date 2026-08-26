@@ -15,10 +15,15 @@ import {
   createWorkspace,
   loadWorkspace,
   parseWorkspace,
+  prepareConversationResponse,
+  readConversationResponse,
+  removeConversationResponse,
+  retainRuns,
   saveWorkspace,
   slugify,
   workspacePath,
 } from "../src/store.ts";
+import type { RunRecord } from "../src/types.ts";
 
 async function temporaryRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "pi-bot-test-"));
@@ -33,6 +38,45 @@ test("a new workspace contains no default agents", () => {
   assert.deepEqual(workspace.bots, []);
   assert.equal(workspace.channels.length, 1);
   assert.equal(workspace.channels[0]?.id, "general");
+  assert.deepEqual(workspace.conversations, []);
+});
+
+test("legacy workspaces gain empty conversations and messages persist", () => {
+  const workspace = createWorkspace("Demo", "/tmp/demo");
+  const legacy = { ...workspace } as Partial<typeof workspace>;
+  delete legacy.conversations;
+  assert.deepEqual(parseWorkspace(legacy).conversations, []);
+
+  workspace.conversations.push({
+    id: "channel:general",
+    kind: "channel",
+    targetId: "general",
+    messages: [
+      {
+        id: "message-1",
+        author: "user",
+        content: "Hello team",
+        status: "completed",
+        createdAt: workspace.createdAt,
+      },
+      {
+        id: "message-2",
+        author: "bot",
+        botId: "atlas",
+        content: "Hello",
+        status: "completed",
+        runId: "run-1",
+        createdAt: workspace.createdAt,
+      },
+    ],
+    contexts: [{ botId: "atlas", runId: "run-1" }],
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+  });
+  assert.deepEqual(
+    parseWorkspace(workspace).conversations,
+    workspace.conversations,
+  );
 });
 
 test("workspace state is stored outside the project with restrictive permissions", async () => {
@@ -46,6 +90,72 @@ test("workspace state is stored outside the project with restrictive permissions
   assert.deepEqual(
     await loadWorkspace("/tmp/project", root),
     parseWorkspace(JSON.parse(contents)),
+  );
+});
+
+test("conversation response files are private and recoverable", async () => {
+  const root = await temporaryRoot();
+  const responseId = "00000000-0000-4000-8000-000000000001";
+  const path = await prepareConversationResponse(
+    "/tmp/project",
+    responseId,
+    root,
+  );
+  await writeFile(path, "Final\0response", { mode: 0o644 });
+  assert.equal(
+    await readConversationResponse("/tmp/project", responseId, root),
+    "Final�response",
+  );
+  assert.equal((await stat(path)).mode & 0o777, 0o600);
+  await removeConversationResponse("/tmp/project", responseId, root);
+  assert.equal(
+    await readConversationResponse("/tmp/project", responseId, root),
+    undefined,
+  );
+  const outside = join(root, "outside-response.txt");
+  await writeFile(outside, "unsafe");
+  await symlink(outside, path);
+  await assert.rejects(
+    readConversationResponse("/tmp/project", responseId, root),
+    /regular file/,
+  );
+});
+
+test("run retention preserves active completion receipts", () => {
+  const workspace = createWorkspace("Demo", "/tmp/demo");
+  const runs = [
+    {
+      id: "active-old",
+      botId: "atlas",
+      task: "Still running",
+      status: "launched",
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
+    },
+    ...Array.from({ length: 120 }, (_, index) => ({
+      id: `done-${index}`,
+      botId: "atlas",
+      task: `Done ${index}`,
+      status: "completed",
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
+    })),
+  ] as RunRecord[];
+  const activeTemplate = runs[0];
+  assert.ok(activeTemplate);
+  const retained = retainRuns(runs);
+  assert.equal(retained.length, 100);
+  assert.ok(retained.some((run) => run.id === "active-old"));
+  assert.ok(!retained.some((run) => run.id === "done-0"));
+  assert.throws(
+    () =>
+      retainRuns(
+        Array.from({ length: 101 }, (_, index) => ({
+          ...activeTemplate,
+          id: `active-${index}`,
+        })) as never,
+      ),
+    /100 runs can remain active/,
   );
 });
 

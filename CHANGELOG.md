@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 — 2026-08-26
+
+- Add one persistent direct conversation for each bot.
+- Add persistent channel conversations with full local history.
+- Continue bot context with pi-subagents resume and saved-history fallback.
+- Route mentioned channel messages only to assigned `@bot-id` recipients.
+- Fan out unmentioned channel messages to all assigned bots.
+- Store final bot responses and hide explicit no-response results.
+- Add scrollable conversation history and Pi multiline message editing.
+
 ## 0.1.3 — 2026-08-26
 
 - Open bot details with Enter from the Bots column.

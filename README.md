@@ -29,7 +29,7 @@ Install the execution engine and Pi Bot:
 
 ```bash
 pi install npm:pi-subagents@0.57.0
-pi install git:github.com/Charlisim/pi-bot@v0.1.3
+pi install git:github.com/Charlisim/pi-bot@v0.2.0
 ```
 
 Restart Pi, or run:
@@ -84,6 +84,22 @@ You review the key execution settings before the profile is saved.
 
 Press `Ctrl+Shift+B` to open the dashboard. Use `←` and `→` to move between the bot, channel, and run columns. Use `↑` and `↓` to select a row. Press `Enter` to open the selected bot, channel, or run. Press `Esc` to return to the dashboard.
 
+## Conversations
+
+A bot has one direct conversation per project. Each new message continues the bot's prior runtime session when pi-subagents can resume it. Pi Bot falls back to the saved conversation history when the prior runtime session is no longer available.
+
+A channel keeps one shared local conversation. Press `Enter` inside a bot or channel conversation to open Pi's multiline editor.
+
+- Mention assigned bots by ID, such as `@atlas`, to send only to them.
+- When a channel message has no mentions, every assigned bot receives it.
+- Each bot is instructed to answer only the part relevant to its role.
+- Use `↑`, `↓`, `PgUp`, and `PgDn` to read older messages.
+- Use `Esc` or `q` to return to the dashboard.
+
+Conversation history is not pruned automatically. The local state safety limits are 10,000 messages and 16 MiB per project.
+
+![Pi Bot channel conversation](docs/images/pi-bot-conversation.svg)
+
 The model-facing `pi_bot` tool can list bots. It can launch a bot only after an interactive human confirmation.
 
 ## Authority profiles
@@ -97,7 +113,7 @@ Pi Bot never derives authority from a personality prompt.
 | Builder | Advisory tools plus `bash`, `edit`, `write` | Explicit implementation work |
 | Custom | Exact user-entered built-in names | A narrower built-in tool set |
 
-Builder and custom selections require an additional confirmation. Version 0.1 rejects unknown extension tools and recursive orchestration tools. Agents cannot spawn subagents or grant themselves new capabilities.
+Builder and custom selections require an additional confirmation. Pi Bot rejects unknown extension tools and recursive orchestration tools. Agents cannot spawn subagents or grant themselves new capabilities.
 
 ## How execution works
 
@@ -115,7 +131,7 @@ Pi Bot profile
        pi-subagents async run
 ```
 
-Runs are asynchronous. Pi's FleetView and subagent commands remain the source of truth for detailed execution status and artifacts.
+Runs are asynchronous. Direct and channel conversations use the public resume RPC to continue available bot sessions. Pi's FleetView and subagent commands remain the source of truth for detailed execution status and artifacts.
 
 ## Local data
 
@@ -127,7 +143,7 @@ Pi Bot stores one schema-versioned workspace per project under:
 
 Set `PI_CODING_AGENT_DIR` to move the Pi agent directory.
 
-State files use restrictive permissions and atomic replacement. Profiles contain the personality and instructions you enter. Bounded run receipts also contain each task verbatim. Do not put credentials or secrets in profile text or tasks. Pi Bot does not store subagent transcripts, tool output, or raw environment values.
+State files use restrictive permissions and atomic replacement. Profiles contain the personality and instructions you enter. Run receipts contain each task verbatim. Conversations contain human messages and final bot responses. Do not put credentials or secrets in profiles, tasks, or conversations. Pi Bot does not store raw subagent transcripts, tool output, or environment values.
 
 Generated runtime profiles live under `~/.pi/agent/agents/pi-bot/<project-hash>/`. Their runtime names include a project hash, so bots from different projects do not collide.
 
@@ -152,15 +168,16 @@ See [SECURITY.md](SECURITY.md) and [the architecture notes](docs/architecture.md
 
 ## Current scope
 
-Version 0.1 is local-first:
+Version 0.2 is local-first:
 
 - Custom agent creation, editing, deletion, and execution.
 - Personality and policy compilation.
-- Local channels for organization.
+- Persistent direct bot conversations with continued context.
+- Persistent channel conversations with mention routing or assigned-bot fanout.
 - Run receipts and completion state.
 - Responsive Pi-native dashboard.
 
-Slack adapters, webhooks, schedules, Orca/Herdr bridges, and shared team servers are intentionally not in the first release. See [the roadmap](docs/roadmap.md).
+Slack adapters, webhooks, schedules, Orca/Herdr bridges, and shared team servers remain outside the current scope. See [the roadmap](docs/roadmap.md).
 
 ## Development
 

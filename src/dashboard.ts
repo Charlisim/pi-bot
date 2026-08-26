@@ -3,6 +3,7 @@ import {
   type Component,
   Key,
   matchesKey,
+  stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
@@ -10,10 +11,12 @@ import {
 import { classifyAuthority } from "./tools.ts";
 import type {
   BotProfile,
-  Channel,
+  Conversation,
   RunRecord,
   WorkspaceSnapshot,
 } from "./types.ts";
+
+export type ConversationViewAction = "close" | "write";
 
 export type DashboardAction =
   | { type: "create-bot" }
@@ -47,9 +50,10 @@ function botRow(
   width: number,
 ): string {
   const marker = selected ? theme.fg("accent", ">") : " ";
+  const safeName = stripTerminalSequences(bot.name);
   const name = selected
-    ? theme.fg("accent", theme.bold(bot.name))
-    : theme.bold(bot.name);
+    ? theme.fg("accent", theme.bold(safeName))
+    : theme.bold(safeName);
   const authority = classifyAuthority(bot.tools);
   const permission =
     authority === "elevated"
@@ -58,7 +62,7 @@ function botRow(
         ? theme.fg("success", "advisory")
         : theme.fg("muted", "no tools");
   return truncateToWidth(
-    `${marker} ${name}  ${theme.fg("muted", bot.role)}  ${permission}`,
+    `${marker} ${name}  ${theme.fg("muted", stripTerminalSequences(bot.role))}  ${permission}`,
     width,
     "…",
   );
@@ -90,7 +94,8 @@ function panelTitle(
 }
 
 function channelRow(name: string, selected: boolean, theme: Theme): string {
-  return `${selected ? theme.fg("accent", ">") : " "} # ${selected ? theme.fg("accent", theme.bold(name)) : name}`;
+  const safeName = stripTerminalSequences(name);
+  return `${selected ? theme.fg("accent", ">") : " "} # ${selected ? theme.fg("accent", theme.bold(safeName)) : safeName}`;
 }
 
 function runRow(
@@ -107,7 +112,7 @@ function runRow(
         : "warning",
     run.status,
   );
-  return `${selected ? theme.fg("accent", ">") : " "} ${status}  ${botName}`;
+  return `${selected ? theme.fg("accent", ">") : " "} ${status}  ${stripTerminalSequences(botName)}`;
 }
 
 export function renderDashboard(
@@ -133,11 +138,11 @@ export function renderDashboard(
     const selected =
       selectedColumn === "bots"
         ? bot
-          ? `> ${bot.name} · ${bot.role}`
+          ? `> ${stripTerminalSequences(bot.name)} · ${stripTerminalSequences(bot.role)}`
           : "> No bots"
         : selectedColumn === "channels"
           ? channel
-            ? `> #${channel.name}`
+            ? `> #${stripTerminalSequences(channel.name)}`
             : "> No channels"
           : run
             ? `> ${run.status} · ${run.id.slice(0, 8)}`
@@ -155,7 +160,7 @@ export function renderDashboard(
   const engine = snapshot.engineReady
     ? paint.fg("success", "● engine ready")
     : paint.fg("warning", "! engine unavailable");
-  const title = `${paint.fg("accent", paint.bold(" π·bot "))}${paint.fg("muted", `/ ${snapshot.workspace.name}`)}`;
+  const title = `${paint.fg("accent", paint.bold(" π·bot "))}${paint.fg("muted", `/ ${stripTerminalSequences(snapshot.workspace.name)}`)}`;
   const header = `│${pad(title, Math.max(1, inner - visibleWidth(engine) - 1))} ${engine}│`;
   const count = (value: number, singular: string) =>
     `${value} ${value === 1 ? singular : `${singular}s`}`;
@@ -463,10 +468,16 @@ class DetailsView implements Component {
   render(width: number): string[] {
     if (width < 40)
       return [
-        this.theme.fg("accent", this.theme.bold(this.title)),
-        this.summary,
-        this.id,
-        ...this.sections.flatMap((section) => [section.label, section.text]),
+        this.theme.fg(
+          "accent",
+          this.theme.bold(stripTerminalSequences(this.title)),
+        ),
+        stripTerminalSequences(this.summary),
+        stripTerminalSequences(this.id),
+        ...this.sections.flatMap((section) => [
+          stripTerminalSequences(section.label),
+          stripTerminalSequences(section.text),
+        ]),
         "[Esc] back",
       ].map((line) => truncateToWidth(line, Math.max(1, width), "…"));
     const inner = width - 2;
@@ -475,14 +486,19 @@ class DetailsView implements Component {
       wrapTextWithAnsi(text, Math.max(1, inner - 2)).map(frame);
     return [
       `╭${"─".repeat(inner)}╮`,
-      frame(this.theme.fg("accent", this.theme.bold(this.title))),
-      frame(this.summary),
-      frame(this.id),
+      frame(
+        this.theme.fg(
+          "accent",
+          this.theme.bold(stripTerminalSequences(this.title)),
+        ),
+      ),
+      frame(stripTerminalSequences(this.summary)),
+      frame(stripTerminalSequences(this.id)),
       `├${"─".repeat(inner)}┤`,
       ...this.sections.flatMap((section, index) => [
         ...(index > 0 ? [frame("")] : []),
-        frame(this.theme.fg("muted", section.label)),
-        ...wrapped(section.text),
+        frame(this.theme.fg("muted", stripTerminalSequences(section.label))),
+        ...wrapped(stripTerminalSequences(section.text)),
       ]),
       `├${"─".repeat(inner)}┤`,
       frame("[Esc] back"),
@@ -520,49 +536,120 @@ export class RunDetails extends DetailsView {
   }
 }
 
-export class BotDetails extends DetailsView {
-  constructor(
-    bot: BotProfile,
-    channelNames: string,
-    theme: Theme,
-    close: () => void,
-  ) {
-    super(
-      "BOT DETAILS",
-      `${bot.name} · ${bot.role}`,
-      bot.id,
-      [
-        { label: "DESCRIPTION", text: bot.description || "No description." },
-        { label: "PERSONALITY", text: bot.personality.summary },
-        { label: "PRINCIPLES", text: bot.personality.principles },
-        { label: "BOUNDARIES", text: bot.personality.boundaries },
-        { label: "INSTRUCTIONS", text: bot.instructions },
-        { label: "TOOLS", text: bot.tools.join(", ") || "No tools." },
-        { label: "CHANNELS", text: channelNames || "No channels." },
-      ],
-      theme,
-      close,
-    );
-  }
-}
+export class ConversationView implements Component {
+  private scrollOffset = 0;
+  private maxScrollOffset = 0;
+  private readonly title: string;
+  private readonly subtitle: string;
+  private readonly getConversation: () => Conversation | undefined;
+  private readonly botNames: ReadonlyMap<string, string>;
+  private readonly theme: Theme;
+  private readonly onAction: (action: ConversationViewAction) => void;
+  private readonly requestRender: () => void;
 
-export class ChannelDetails extends DetailsView {
   constructor(
-    channel: Channel,
-    botNames: string,
+    title: string,
+    subtitle: string,
+    getConversation: () => Conversation | undefined,
+    botNames: ReadonlyMap<string, string>,
     theme: Theme,
-    close: () => void,
+    onAction: (action: ConversationViewAction) => void,
+    requestRender: () => void,
   ) {
-    super(
-      "CHANNEL DETAILS",
-      `#${channel.name}`,
-      channel.id,
-      [
-        { label: "TOPIC", text: channel.topic },
-        { label: "ASSIGNED BOTS", text: botNames || "No bots assigned." },
-      ],
-      theme,
-      close,
-    );
+    this.title = title;
+    this.subtitle = subtitle;
+    this.getConversation = getConversation;
+    this.botNames = botNames;
+    this.theme = theme;
+    this.onAction = onAction;
+    this.requestRender = requestRender;
   }
+
+  render(width: number): string[] {
+    const bodyWidth = Math.max(1, width - (width < 40 ? 0 : 4));
+    const messages = this.getConversation()?.messages ?? [];
+    const messageLines = messages.flatMap((message) => {
+      const author = stripTerminalSequences(
+        message.author === "user"
+          ? "YOU"
+          : (this.botNames.get(message.botId ?? "") ?? message.botId ?? "BOT"),
+      );
+      const status =
+        message.status === "pending"
+          ? this.theme.fg("warning", " · thinking")
+          : message.status === "failed"
+            ? this.theme.fg("error", " · failed")
+            : "";
+      return [
+        `${this.theme.fg(message.author === "user" ? "accent" : "success", this.theme.bold(author))}${status}`,
+        ...wrapTextWithAnsi(stripTerminalSequences(message.content), bodyWidth),
+        "",
+      ];
+    });
+    if (messageLines.length === 0)
+      messageLines.push("No messages yet. Press Enter to write.");
+    const visibleCount = width < 40 ? 10 : 18;
+    this.maxScrollOffset = Math.max(0, messageLines.length - visibleCount);
+    this.scrollOffset = Math.min(this.scrollOffset, this.maxScrollOffset);
+    const end = messageLines.length - this.scrollOffset;
+    const visible = messageLines.slice(Math.max(0, end - visibleCount), end);
+    const scrollHint = this.maxScrollOffset
+      ? ` · ${this.scrollOffset}/${this.maxScrollOffset} lines back`
+      : "";
+    if (width < 40)
+      return [
+        this.theme.fg(
+          "accent",
+          this.theme.bold(stripTerminalSequences(this.title)),
+        ),
+        stripTerminalSequences(this.subtitle),
+        ...visible,
+        `[Enter] write · [↑↓] history${scrollHint}`,
+        "[Esc] back",
+      ].map((line) => truncateToWidth(line, Math.max(1, width), "…"));
+    const inner = width - 2;
+    const frame = (text: string) => `│${pad(` ${text}`, inner)}│`;
+    return [
+      `╭${"─".repeat(inner)}╮`,
+      frame(
+        this.theme.fg(
+          "accent",
+          this.theme.bold(stripTerminalSequences(this.title)),
+        ),
+      ),
+      frame(stripTerminalSequences(this.subtitle)),
+      `├${"─".repeat(inner)}┤`,
+      ...visible.map(frame),
+      `├${"─".repeat(inner)}┤`,
+      frame(`[Enter] write  [↑↓/PgUp/PgDn] history${scrollHint}`),
+      frame("[Esc] back"),
+      `╰${"─".repeat(inner)}╯`,
+    ];
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, Key.enter)) {
+      this.onAction("write");
+      return;
+    }
+    if (matchesKey(data, Key.escape) || data.toLowerCase() === "q") {
+      this.onAction("close");
+      return;
+    }
+    const previous = this.scrollOffset;
+    if (matchesKey(data, Key.up) || data === "k")
+      this.scrollOffset = Math.min(this.maxScrollOffset, this.scrollOffset + 1);
+    else if (matchesKey(data, Key.down) || data === "j")
+      this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+    else if (matchesKey(data, Key.pageUp))
+      this.scrollOffset = Math.min(
+        this.maxScrollOffset,
+        this.scrollOffset + 10,
+      );
+    else if (matchesKey(data, Key.pageDown))
+      this.scrollOffset = Math.max(0, this.scrollOffset - 10);
+    if (this.scrollOffset !== previous) this.requestRender();
+  }
+
+  invalidate(): void {}
 }

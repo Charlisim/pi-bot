@@ -118,7 +118,83 @@ test("run inspection uses the public status RPC", async () => {
   client.dispose();
 });
 
-test("completion events correlate by run ID and tolerate extra fields", () => {
+test("resume availability falls back only for a definitive missing run", async () => {
+  const missingEvents = new FakeEvents();
+  const missingClient = new SubagentsClient(missingEvents);
+  missingEvents.on("subagents:rpc:v1:request", (value) => {
+    const request = value as { requestId: string };
+    missingEvents.emit(`subagents:rpc:v1:reply:${request.requestId}`, {
+      version: 1,
+      requestId: request.requestId,
+      success: false,
+      error: {
+        code: "execution_failed",
+        message: "Async run not found. Provide id or dir.",
+      },
+    });
+  });
+  assert.equal(await missingClient.resumeAvailable("missing"), false);
+  missingClient.dispose();
+
+  const unavailableEvents = new FakeEvents();
+  const unavailableClient = new SubagentsClient(unavailableEvents);
+  unavailableEvents.on("subagents:rpc:v1:request", (value) => {
+    const request = value as { requestId: string };
+    unavailableEvents.emit(`subagents:rpc:v1:reply:${request.requestId}`, {
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: {
+        text: "State: completed\nResume: unavailable; no child session file was persisted.",
+      },
+    });
+  });
+  assert.equal(await unavailableClient.resumeAvailable("unavailable"), false);
+  unavailableClient.dispose();
+
+  const uncertainClient = new SubagentsClient(new FakeEvents());
+  await assert.rejects(
+    uncertainClient.resumeAvailable("uncertain", 5),
+    /pi-subagents is not available/,
+  );
+  uncertainClient.dispose();
+});
+
+test("resume continues a stored child session and returns its new run ID", async () => {
+  const events = new FakeEvents();
+  const client = new SubagentsClient(events);
+  events.on("subagents:rpc:v1:request", (value) => {
+    const request = value as {
+      requestId: string;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    assert.equal(request.method, "resume");
+    assert.deepEqual(request.params, {
+      id: "run-7",
+      message: "Continue the conversation",
+      output: "/tmp/response.txt",
+      outputMode: "file-only",
+    });
+    events.emit(`subagents:rpc:v1:reply:${request.requestId}`, {
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: { details: { runId: "run-8" } },
+    });
+  });
+  assert.equal(
+    await client.resume(
+      "run-7",
+      "Continue the conversation",
+      "/tmp/response.txt",
+    ),
+    "run-8",
+  );
+  client.dispose();
+});
+
+test("completion events correlate by run ID and include final output", () => {
   const events = new FakeEvents();
   const client = new SubagentsClient(events);
   const completed: unknown[] = [];
@@ -126,10 +202,13 @@ test("completion events correlate by run ID and tolerate extra fields", () => {
   events.emit("subagent:async-complete", {
     id: "run-7",
     state: "complete",
+    results: [{ output: "Final\0answer" }],
     extra: true,
   });
   events.emit("subagent:async-complete", { runId: "run-8", state: "running" });
-  assert.deepEqual(completed, [{ runId: "run-7", status: "completed" }]);
+  assert.deepEqual(completed, [
+    { runId: "run-7", status: "completed", output: "Final�answer" },
+  ]);
   client.dispose();
 });
 

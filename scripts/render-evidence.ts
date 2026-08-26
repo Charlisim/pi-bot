@@ -1,8 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { renderDashboard } from "../src/dashboard.ts";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { ConversationView, renderDashboard } from "../src/dashboard.ts";
 import { createWorkspace } from "../src/store.ts";
-import type { BotProfile, WorkspaceSnapshot } from "../src/types.ts";
+import type { BotProfile } from "../src/types.ts";
 
 function escapeXml(value: string): string {
   return value
@@ -87,6 +88,46 @@ populatedWorkspace.channels.push({
   topic: "Product decisions",
   createdAt: "2026-08-26T00:00:00.000Z",
 });
+populatedWorkspace.conversations = [
+  {
+    id: "channel:general",
+    kind: "channel",
+    targetId: "general",
+    messages: [
+      {
+        id: "message-1",
+        author: "user",
+        content: "@atlas define the launch scope. @lumen check the user flow.",
+        status: "completed",
+        createdAt: "2026-08-26T00:00:00.000Z",
+      },
+      {
+        id: "message-2",
+        author: "bot",
+        botId: "atlas",
+        content: "I will define the launch scope and acceptance criteria.",
+        status: "completed",
+        runId: "run-1",
+        createdAt: "2026-08-26T00:01:00.000Z",
+      },
+      {
+        id: "message-3",
+        author: "bot",
+        botId: "lumen",
+        content: "I will test the onboarding path and report usability gaps.",
+        status: "completed",
+        runId: "run-2",
+        createdAt: "2026-08-26T00:02:00.000Z",
+      },
+    ],
+    contexts: [
+      { botId: "atlas", runId: "run-1" },
+      { botId: "lumen", runId: "run-2" },
+    ],
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:02:00.000Z",
+  },
+];
 populatedWorkspace.runs = [
   {
     id: "run-1",
@@ -106,29 +147,50 @@ populatedWorkspace.runs = [
   },
 ];
 
+const evidenceTheme = {
+  fg: (_name: string, text: string) => text,
+  bold: (text: string) => text,
+} as Theme;
+
 const targets: Array<{
   path: string;
   title: string;
-  snapshot: WorkspaceSnapshot;
+  lines: string[];
 }> = [
   {
     path: "docs/images/pi-bot-empty.svg",
     title: "Pi Bot empty workspace",
-    snapshot: { workspace: emptyWorkspace, engineReady: true },
+    lines: renderDashboard(
+      { workspace: emptyWorkspace, engineReady: true },
+      118,
+    ),
   },
   {
     path: "docs/images/pi-bot-dashboard.svg",
     title: "Pi Bot team dashboard",
-    snapshot: { workspace: populatedWorkspace, engineReady: true },
+    lines: renderDashboard(
+      { workspace: populatedWorkspace, engineReady: true },
+      118,
+    ),
+  },
+  {
+    path: "docs/images/pi-bot-conversation.svg",
+    title: "Pi Bot channel conversation",
+    lines: new ConversationView(
+      "#general",
+      "Shared team updates and decisions. · @atlas, @lumen",
+      () => populatedWorkspace.conversations[0],
+      new Map(populatedWorkspace.bots.map((item) => [item.id, item.name])),
+      evidenceTheme,
+      () => undefined,
+      () => undefined,
+    ).render(118),
   },
 ];
 
 for (const target of targets) {
   const path = resolve(target.path);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(
-    path,
-    renderSvg(renderDashboard(target.snapshot, 118), target.title),
-  );
+  await writeFile(path, renderSvg(target.lines, target.title));
   process.stdout.write(`Rendered ${target.path}\n`);
 }

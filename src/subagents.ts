@@ -26,6 +26,16 @@ interface RpcFailure {
 
 type RpcReply = RpcSuccess | RpcFailure;
 
+class SubagentsRpcError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.name = "SubagentsRpcError";
+    this.code = code;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -69,9 +79,11 @@ function runIdFromData(data: unknown): string {
 export interface CompletionEvent {
   runId: string;
   status: "completed" | "failed" | "paused" | "stopped";
+  output?: string;
+  error?: string;
 }
 
-type RpcMethod = "ping" | "spawn" | "status" | "stop";
+type RpcMethod = "ping" | "resume" | "spawn" | "status" | "stop";
 
 function normalizeRunState(
   state: unknown,
@@ -142,7 +154,7 @@ export class SubagentsClient {
   }
 
   async spawn(
-    input: { agent: string; task: string; cwd: string },
+    input: { agent: string; task: string; cwd: string; output?: string },
     timeoutMs = 10_000,
   ): Promise<string> {
     const data = await this.request(
@@ -154,6 +166,9 @@ export class SubagentsClient {
         context: "fresh",
         agentScope: "user",
         async: true,
+        ...(input.output
+          ? { output: input.output, outputMode: "file-only" }
+          : {}),
       },
       timeoutMs,
     );
@@ -170,6 +185,42 @@ export class SubagentsClient {
 
   async inspect(runId: string, timeoutMs = 5_000): Promise<string> {
     return textFromData(await this.request("status", { id: runId }, timeoutMs));
+  }
+
+  async resumeAvailable(runId: string, timeoutMs = 5_000): Promise<boolean> {
+    try {
+      const status = await this.inspect(runId, timeoutMs);
+      return !(
+        /^\s*State:\s*(stopped|rejected)\b/im.test(status) ||
+        /^\s*Resume:\s*unavailable\b/im.test(status)
+      );
+    } catch (error) {
+      if (
+        error instanceof SubagentsRpcError &&
+        /\bnot found\b/i.test(error.message)
+      )
+        return false;
+      throw error;
+    }
+  }
+
+  async resume(
+    runId: string,
+    message: string,
+    output?: string,
+    timeoutMs = 10_000,
+  ): Promise<string> {
+    return runIdFromData(
+      await this.request(
+        "resume",
+        {
+          id: runId,
+          message,
+          ...(output ? { output, outputMode: "file-only" } : {}),
+        },
+        timeoutMs,
+      ),
+    );
   }
 
   async stop(runId: string, timeoutMs = 5_000): Promise<void> {
@@ -218,7 +269,9 @@ export class SubagentsClient {
           if (reply.success) finish(() => resolve(reply.data));
           else
             finish(() =>
-              reject(new Error(`${reply.error.code}: ${reply.error.message}`)),
+              reject(
+                new SubagentsRpcError(reply.error.code, reply.error.message),
+              ),
             );
         } catch (error) {
           finish(() => reject(error));
@@ -265,6 +318,29 @@ export class SubagentsClient {
             : rawState === "stopped"
               ? "stopped"
               : undefined;
-    return status ? { runId, status } : undefined;
+    if (!status) return undefined;
+    const child =
+      Array.isArray(payload.results) && isRecord(payload.results[0])
+        ? payload.results[0]
+        : undefined;
+    const outputValue = child?.output ?? payload.output ?? payload.summary;
+    const errorValue = child?.error ?? payload.error;
+    const output =
+      typeof outputValue === "string" && outputValue.trim()
+        ? outputValue
+            .trim()
+            .replaceAll("\0", "�")
+            .slice(0, 64 * 1_024)
+        : undefined;
+    const error =
+      typeof errorValue === "string" && errorValue.trim()
+        ? errorValue.trim().replaceAll("\0", "�").slice(0, 8_192)
+        : undefined;
+    return {
+      runId,
+      status,
+      ...(output ? { output } : {}),
+      ...(error ? { error } : {}),
+    };
   }
 }

@@ -11,9 +11,12 @@ Pi Bot follows a local-first path. Each phase must keep one source of truth and 
 - [x] Durable local state and run receipts.
 - [x] Human confirmation for elevated tools.
 
-## 0.2 — Team workflows
+## 0.2 — Team conversations
 
-- Topic threads and bounded channel briefs.
+- [x] Persistent direct bot conversations.
+- [x] Persistent channel conversations.
+- [x] Mention routing and assigned-bot fanout.
+- [x] Continued bot context with saved-history fallback.
 - Human decision gates.
 - Finite feedback loops.
 - Run detail and stop/steer controls through public pi-subagents RPC.

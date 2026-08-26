@@ -3,14 +3,15 @@ import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
-  BotDetails,
-  ChannelDetails,
+  ConversationView,
+  type ConversationViewAction,
   Dashboard,
   type DashboardAction,
   RunDetails,
   renderDashboard,
 } from "../src/dashboard.ts";
 import { createWorkspace } from "../src/store.ts";
+import type { Conversation } from "../src/types.ts";
 
 const snapshot = {
   workspace: createWorkspace(
@@ -173,48 +174,57 @@ test("run details ignore the opening Enter and close with Escape", () => {
   assert.equal(closed, true);
 });
 
-test("bot and channel details show their selected records", () => {
+test("conversation views show full scrollable history and accept messages", () => {
   const theme = {
     fg: (_name: string, text: string) => text,
     bold: (text: string) => text,
   } as Theme;
-  const bot = {
-    id: "atlas",
-    name: "Atlas",
-    role: "Reviewer",
-    description: "Reviews changes.",
-    personality: {
-      summary: "Careful",
-      principles: "Verify claims.",
-      boundaries: "Do not edit.",
-    },
-    instructions: "Review the task.",
-    tools: ["read"],
-    channelIds: ["general"],
-  } as never;
-  const channel = {
-    id: "general",
-    name: "general",
-    topic: "Shared decisions.",
-  } as never;
-
-  const botOutput = new BotDetails(bot, "#general", theme, () => undefined)
-    .render(72)
-    .join("\n");
-  const channelOutput = new ChannelDetails(
-    channel,
-    "Atlas",
+  const conversation = {
+    id: "channel:general",
+    kind: "channel",
+    targetId: "general",
+    messages: Array.from({ length: 25 }, (_, index) => ({
+      id: `message-${index}`,
+      author: index % 2 ? "bot" : "user",
+      ...(index % 2 ? { botId: "atlas" } : {}),
+      content: `Message ${index}`,
+      status: "completed",
+      createdAt: snapshot.workspace.createdAt,
+    })),
+    contexts: [],
+    createdAt: snapshot.workspace.createdAt,
+    updatedAt: snapshot.workspace.updatedAt,
+  } as Conversation;
+  conversation.messages.push({
+    id: "message-unsafe",
+    author: "bot",
+    botId: "atlas",
+    content: "\u001b]52;c;ZXZpbA==\u0007Visible reply",
+    status: "completed",
+    createdAt: snapshot.workspace.createdAt,
+  });
+  const actions: ConversationViewAction[] = [];
+  const view = new ConversationView(
+    "#general",
+    "Shared decisions.",
+    () => conversation,
+    new Map([["atlas", "Atlas"]]),
     theme,
+    (action) => actions.push(action),
     () => undefined,
-  )
-    .render(72)
-    .join("\n");
-  assert.match(botOutput, /BOT DETAILS/);
-  assert.match(botOutput, /Reviews changes/);
-  assert.match(botOutput, /#general/);
-  assert.match(channelOutput, /CHANNEL DETAILS/);
-  assert.match(channelOutput, /Shared decisions/);
-  assert.match(channelOutput, /Atlas/);
+  );
+
+  const latestOutput = view.render(72).join("\n");
+  assert.match(latestOutput, /Visible reply/);
+  assert.equal(latestOutput.includes("\u001b]52"), false);
+  for (let index = 0; index < 6; index += 1) view.handleInput("\u001b[5~");
+  assert.match(view.render(72).join("\n"), /Message 0/);
+  for (const width of [30, 72, 120])
+    for (const line of view.render(width))
+      assert.ok(visibleWidth(line) <= width);
+  view.handleInput("\r");
+  view.handleInput("\u001b");
+  assert.deepEqual(actions, ["write", "close"]);
 });
 
 test("selection stays visible in long bot and channel lists", () => {
