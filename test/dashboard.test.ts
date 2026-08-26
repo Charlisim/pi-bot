@@ -3,6 +3,8 @@ import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
+  BotDetails,
+  ChannelDetails,
   Dashboard,
   type DashboardAction,
   RunDetails,
@@ -84,8 +86,10 @@ test("left and right move focus between dashboard columns", () => {
     () => undefined,
   );
 
+  dashboard.handleInput("\r");
   dashboard.handleInput("\u001b[C");
   assert.match(dashboard.render(120).join("\n"), /> # general/);
+  dashboard.handleInput("\r");
   dashboard.handleInput("\u001b[B");
   assert.match(dashboard.render(120).join("\n"), /> # reviews/);
   dashboard.handleInput("\u001b[C");
@@ -97,7 +101,11 @@ test("left and right move focus between dashboard columns", () => {
     for (const line of lines) assert.ok(visibleWidth(line) <= width);
   }
   dashboard.handleInput("\r");
-  assert.deepEqual(actions, [{ type: "inspect-run", runId: "run-1" }]);
+  assert.deepEqual(actions, [
+    { type: "inspect-bot", botId: "bot-1" },
+    { type: "inspect-channel", channelId: "channel-1" },
+    { type: "inspect-run", runId: "run-1" },
+  ]);
 });
 
 test("retained runs stay reachable after the last bot is deleted", () => {
@@ -163,6 +171,50 @@ test("run details ignore the opening Enter and close with Escape", () => {
   assert.equal(closed, false);
   details.handleInput("\u001b");
   assert.equal(closed, true);
+});
+
+test("bot and channel details show their selected records", () => {
+  const theme = {
+    fg: (_name: string, text: string) => text,
+    bold: (text: string) => text,
+  } as Theme;
+  const bot = {
+    id: "atlas",
+    name: "Atlas",
+    role: "Reviewer",
+    description: "Reviews changes.",
+    personality: {
+      summary: "Careful",
+      principles: "Verify claims.",
+      boundaries: "Do not edit.",
+    },
+    instructions: "Review the task.",
+    tools: ["read"],
+    channelIds: ["general"],
+  } as never;
+  const channel = {
+    id: "general",
+    name: "general",
+    topic: "Shared decisions.",
+  } as never;
+
+  const botOutput = new BotDetails(bot, "#general", theme, () => undefined)
+    .render(72)
+    .join("\n");
+  const channelOutput = new ChannelDetails(
+    channel,
+    "Atlas",
+    theme,
+    () => undefined,
+  )
+    .render(72)
+    .join("\n");
+  assert.match(botOutput, /BOT DETAILS/);
+  assert.match(botOutput, /Reviews changes/);
+  assert.match(botOutput, /#general/);
+  assert.match(channelOutput, /CHANNEL DETAILS/);
+  assert.match(channelOutput, /Shared decisions/);
+  assert.match(channelOutput, /Atlas/);
 });
 
 test("selection stays visible in long bot and channel lists", () => {

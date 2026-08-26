@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 — 2026-08-26
+
+- Open bot details with Enter from the Bots column.
+- Open channel details with Enter from the Channels column.
+- Show assigned channels on bots and assigned bots on channels.
+
 ## 0.1.2 — 2026-08-26
 
 - Keep run details open after the Enter key opens them.

@@ -8,13 +8,20 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { classifyAuthority } from "./tools.ts";
-import type { BotProfile, RunRecord, WorkspaceSnapshot } from "./types.ts";
+import type {
+  BotProfile,
+  Channel,
+  RunRecord,
+  WorkspaceSnapshot,
+} from "./types.ts";
 
 export type DashboardAction =
   | { type: "create-bot" }
   | { type: "edit-bot"; botId: string }
   | { type: "delete-bot"; botId: string }
   | { type: "run-bot"; botId: string }
+  | { type: "inspect-bot"; botId: string }
+  | { type: "inspect-channel"; channelId: string }
   | { type: "inspect-run"; runId: string }
   | { type: "create-channel" }
   | { type: "close" };
@@ -388,12 +395,20 @@ export class Dashboard implements Component {
       this.onAction({ type: "close" });
       return;
     }
-    if (
-      this.selectedColumn === "runs" &&
-      (matchesKey(data, Key.enter) || key === "o")
-    ) {
-      const run = [...this.snapshot.workspace.runs].reverse()[this.selectedRun];
-      if (run) this.onAction({ type: "inspect-run", runId: run.id });
+    if (matchesKey(data, Key.enter) || key === "o") {
+      if (this.selectedColumn === "bots") {
+        const bot = this.snapshot.workspace.bots[this.selectedBot];
+        if (bot) this.onAction({ type: "inspect-bot", botId: bot.id });
+      } else if (this.selectedColumn === "channels") {
+        const channel = this.snapshot.workspace.channels[this.selectedChannel];
+        if (channel)
+          this.onAction({ type: "inspect-channel", channelId: channel.id });
+      } else {
+        const run = [...this.snapshot.workspace.runs].reverse()[
+          this.selectedRun
+        ];
+        if (run) this.onAction({ type: "inspect-run", runId: run.id });
+      }
       return;
     }
     const bot = this.snapshot.workspace.bots[this.selectedBot];
@@ -416,23 +431,31 @@ export class Dashboard implements Component {
   invalidate(): void {}
 }
 
-export class RunDetails implements Component {
-  private readonly run: RunRecord;
-  private readonly botName: string;
-  private readonly runtimeDetails: string;
+interface DetailSection {
+  label: string;
+  text: string;
+}
+
+class DetailsView implements Component {
+  private readonly title: string;
+  private readonly summary: string;
+  private readonly id: string;
+  private readonly sections: readonly DetailSection[];
   private readonly theme: Theme;
   private readonly close: () => void;
 
   constructor(
-    run: RunRecord,
-    botName: string,
-    runtimeDetails: string,
+    title: string,
+    summary: string,
+    id: string,
+    sections: readonly DetailSection[],
     theme: Theme,
     close: () => void,
   ) {
-    this.run = run;
-    this.botName = botName;
-    this.runtimeDetails = runtimeDetails;
+    this.title = title;
+    this.summary = summary;
+    this.id = id;
+    this.sections = sections;
     this.theme = theme;
     this.close = close;
   }
@@ -440,10 +463,10 @@ export class RunDetails implements Component {
   render(width: number): string[] {
     if (width < 40)
       return [
-        this.theme.fg("accent", this.theme.bold("RUN DETAILS")),
-        `${this.botName} · ${this.run.status}`,
-        this.run.id,
-        this.run.task,
+        this.theme.fg("accent", this.theme.bold(this.title)),
+        this.summary,
+        this.id,
+        ...this.sections.flatMap((section) => [section.label, section.text]),
         "[Esc] back",
       ].map((line) => truncateToWidth(line, Math.max(1, width), "…"));
     const inner = width - 2;
@@ -452,15 +475,15 @@ export class RunDetails implements Component {
       wrapTextWithAnsi(text, Math.max(1, inner - 2)).map(frame);
     return [
       `╭${"─".repeat(inner)}╮`,
-      frame(this.theme.fg("accent", this.theme.bold("RUN DETAILS"))),
-      frame(`${this.botName} · ${this.run.status}`),
-      frame(this.run.id),
+      frame(this.theme.fg("accent", this.theme.bold(this.title))),
+      frame(this.summary),
+      frame(this.id),
       `├${"─".repeat(inner)}┤`,
-      frame(this.theme.fg("muted", "TASK")),
-      ...wrapped(this.run.task),
-      frame(""),
-      frame(this.theme.fg("muted", "RUNTIME")),
-      ...wrapped(this.runtimeDetails),
+      ...this.sections.flatMap((section, index) => [
+        ...(index > 0 ? [frame("")] : []),
+        frame(this.theme.fg("muted", section.label)),
+        ...wrapped(section.text),
+      ]),
       `├${"─".repeat(inner)}┤`,
       frame("[Esc] back"),
       `╰${"─".repeat(inner)}╯`,
@@ -473,4 +496,73 @@ export class RunDetails implements Component {
   }
 
   invalidate(): void {}
+}
+
+export class RunDetails extends DetailsView {
+  constructor(
+    run: RunRecord,
+    botName: string,
+    runtimeDetails: string,
+    theme: Theme,
+    close: () => void,
+  ) {
+    super(
+      "RUN DETAILS",
+      `${botName} · ${run.status}`,
+      run.id,
+      [
+        { label: "TASK", text: run.task },
+        { label: "RUNTIME", text: runtimeDetails },
+      ],
+      theme,
+      close,
+    );
+  }
+}
+
+export class BotDetails extends DetailsView {
+  constructor(
+    bot: BotProfile,
+    channelNames: string,
+    theme: Theme,
+    close: () => void,
+  ) {
+    super(
+      "BOT DETAILS",
+      `${bot.name} · ${bot.role}`,
+      bot.id,
+      [
+        { label: "DESCRIPTION", text: bot.description || "No description." },
+        { label: "PERSONALITY", text: bot.personality.summary },
+        { label: "PRINCIPLES", text: bot.personality.principles },
+        { label: "BOUNDARIES", text: bot.personality.boundaries },
+        { label: "INSTRUCTIONS", text: bot.instructions },
+        { label: "TOOLS", text: bot.tools.join(", ") || "No tools." },
+        { label: "CHANNELS", text: channelNames || "No channels." },
+      ],
+      theme,
+      close,
+    );
+  }
+}
+
+export class ChannelDetails extends DetailsView {
+  constructor(
+    channel: Channel,
+    botNames: string,
+    theme: Theme,
+    close: () => void,
+  ) {
+    super(
+      "CHANNEL DETAILS",
+      `#${channel.name}`,
+      channel.id,
+      [
+        { label: "TOPIC", text: channel.topic },
+        { label: "ASSIGNED BOTS", text: botNames || "No bots assigned." },
+      ],
+      theme,
+      close,
+    );
+  }
 }

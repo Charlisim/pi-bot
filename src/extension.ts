@@ -6,7 +6,13 @@ import type {
 import { Type } from "typebox";
 import { runtimeAgentName } from "./agent.ts";
 import { publishWorkspaceAgents, stageWorkspaceAgents } from "./agent-files.ts";
-import { Dashboard, type DashboardAction, RunDetails } from "./dashboard.ts";
+import {
+  BotDetails,
+  ChannelDetails,
+  Dashboard,
+  type DashboardAction,
+  RunDetails,
+} from "./dashboard.ts";
 import { loadWorkspace, saveWorkspace } from "./store.ts";
 import { type CompletionEvent, SubagentsClient } from "./subagents.ts";
 import { classifyAuthority } from "./tools.ts";
@@ -271,6 +277,42 @@ export default function piBotExtension(pi: ExtensionAPI) {
     }
   };
 
+  const inspectBot = async (botId: string) => {
+    if (!ctx || !workspace) return;
+    const bot = workspace.bots.find((item) => item.id === botId);
+    if (!bot) throw new Error(`Unknown bot: ${botId}`);
+    const channelNames = workspace.channels
+      .filter((channel) => bot.channelIds.includes(channel.id))
+      .map((channel) => `#${channel.name}`)
+      .join(", ");
+    if (ctx.mode !== "tui") {
+      ctx.ui.notify(`${bot.name} — ${bot.role}\n${bot.description}`, "info");
+      return;
+    }
+    await ctx.ui.custom<void>(
+      (_tui, theme, _keybindings, done) =>
+        new BotDetails(bot, channelNames, theme, () => done(undefined)),
+    );
+  };
+
+  const inspectChannel = async (channelId: string) => {
+    if (!ctx || !workspace) return;
+    const channel = workspace.channels.find((item) => item.id === channelId);
+    if (!channel) throw new Error(`Unknown channel: ${channelId}`);
+    const botNames = workspace.bots
+      .filter((bot) => bot.channelIds.includes(channel.id))
+      .map((bot) => bot.name)
+      .join(", ");
+    if (ctx.mode !== "tui") {
+      ctx.ui.notify(`#${channel.name}\n${channel.topic}`, "info");
+      return;
+    }
+    await ctx.ui.custom<void>(
+      (_tui, theme, _keybindings, done) =>
+        new ChannelDetails(channel, botNames, theme, () => done(undefined)),
+    );
+  };
+
   const inspectRun = async (runId: string) => {
     if (!ctx || !workspace) return;
     const run = workspace.runs.find((item) => item.id === runId);
@@ -360,6 +402,9 @@ export default function piBotExtension(pi: ExtensionAPI) {
         else if (action.type === "delete-bot") await deleteBot(action.botId);
         else if (action.type === "create-channel") await createChannel();
         else if (action.type === "run-bot") await runBot(action.botId);
+        else if (action.type === "inspect-bot") await inspectBot(action.botId);
+        else if (action.type === "inspect-channel")
+          await inspectChannel(action.channelId);
         else if (action.type === "inspect-run") await inspectRun(action.runId);
       } catch (error) {
         ctx.ui.notify(
