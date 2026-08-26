@@ -29,7 +29,7 @@ Install the execution engine and Pi Bot:
 
 ```bash
 pi install npm:pi-subagents@0.57.0
-pi install git:github.com/Charlisim/pi-bot@v0.1.1
+pi install git:github.com/Charlisim/pi-bot@v0.1.2
 ```
 
 Restart Pi, or run:
@@ -82,7 +82,7 @@ You review the key execution settings before the profile is saved.
 /pi-bot channel                  Create a channel
 ```
 
-Press `Ctrl+Shift+B` to open the dashboard. Use `←` and `→` to move between the bot, channel, and run columns. Use `↑` and `↓` to select a row. Press `Enter` on a run to open it directly.
+Press `Ctrl+Shift+B` to open the dashboard. Use `←` and `→` to move between the bot, channel, and run columns. Use `↑` and `↓` to select a row. Press `Enter` on a run to open it directly. Press `Esc` to return to the dashboard.
 
 The model-facing `pi_bot` tool can list bots. It can launch a bot only after an interactive human confirmation.
 

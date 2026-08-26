@@ -444,7 +444,7 @@ export class RunDetails implements Component {
         `${this.botName} · ${this.run.status}`,
         this.run.id,
         this.run.task,
-        "[Enter/Esc] back",
+        "[Esc] back",
       ].map((line) => truncateToWidth(line, Math.max(1, width), "…"));
     const inner = width - 2;
     const frame = (text: string) => `│${pad(` ${text}`, inner)}│`;
@@ -462,17 +462,13 @@ export class RunDetails implements Component {
       frame(this.theme.fg("muted", "RUNTIME")),
       ...wrapped(this.runtimeDetails),
       `├${"─".repeat(inner)}┤`,
-      frame("[Enter/Esc] back"),
+      frame("[Esc] back"),
       `╰${"─".repeat(inner)}╯`,
     ];
   }
 
   handleInput(data: string): void {
-    if (
-      matchesKey(data, Key.enter) ||
-      matchesKey(data, Key.escape) ||
-      data.toLowerCase() === "q"
-    )
+    if (matchesKey(data, Key.escape) || data.toLowerCase() === "q")
       this.close();
   }
 

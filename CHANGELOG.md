@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 — 2026-08-26
+
+- Keep run details open after the Enter key opens them.
+- Use Escape or `q` to return to the dashboard from run details.
+
 ## 0.1.1 — 2026-08-26
 
 - Add left and right navigation between dashboard columns.

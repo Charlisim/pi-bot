@@ -134,7 +134,7 @@ test("retained runs stay reachable after the last bot is deleted", () => {
   assert.deepEqual(actions, [{ type: "inspect-run", runId: "run-retained" }]);
 });
 
-test("run details stay within the terminal and close with Enter", () => {
+test("run details ignore the opening Enter and close with Escape", () => {
   let closed = false;
   const details = new RunDetails(
     {
@@ -160,6 +160,8 @@ test("run details stay within the terminal and close with Enter", () => {
     for (const line of details.render(width))
       assert.ok(visibleWidth(line) <= width);
   details.handleInput("\r");
+  assert.equal(closed, false);
+  details.handleInput("\u001b");
   assert.equal(closed, true);
 });
 
