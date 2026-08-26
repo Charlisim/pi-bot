@@ -1,0 +1,5 @@
+packages:
+  - "."
+
+minimumReleaseAgeExclude:
+  - pi-subagents@0.57.0
