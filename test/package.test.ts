@@ -28,6 +28,16 @@ test("the package exposes only the extension and no default agents", async () =>
   }
 });
 
+test("the package requires the verified Pi extension API", () => {
+  for (const name of [
+    "@earendil-works/pi-agent-core",
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-tui",
+  ])
+    assert.equal(packageJson.peerDependencies[name], ">=0.84.3");
+});
+
 test("the package has no lifecycle scripts", () => {
   for (const name of ["preinstall", "install", "postinstall"])
     assert.equal(packageJson.scripts[name], undefined);

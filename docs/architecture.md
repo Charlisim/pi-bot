@@ -47,8 +47,8 @@ Pi Bot writes these fields explicitly:
 
 - Compiled system prompt.
 - Tool list, including an explicit empty list.
-- Optional preferred model.
-- Explicit thinking level.
+- Exact model selected from Pi's active registry.
+- Explicit thinking level supported by that model.
 - Fresh child context.
 - No inherited skills or ambient child extensions.
 - Maximum subagent depth of one.
@@ -83,5 +83,5 @@ Tool authority comes from an explicit human selection. Pi Bot denies recursive o
 
 - Tool restrictions are not an OS sandbox.
 - Detached runs can outlive the owning Pi session. Startup reconciliation recovers a saved final response when the child wrote one. It keeps the receipt pending when neither a terminal status nor a response file proves completion.
-- A configured model name is resolved by pi-subagents at launch.
+- New profiles select exact `provider/model` IDs from Pi's active or session-scoped registry. Legacy unavailable IDs fail before a task or conversation message starts.
 - Local channels are persistent project conversations. They are not external chat transports.

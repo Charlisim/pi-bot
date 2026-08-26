@@ -1,6 +1,6 @@
 {
   "name": "pi-bot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Create and orchestrate custom AI teams inside Pi.",
   "type": "module",
   "packageManager": "pnpm@11.5.2",
@@ -53,10 +53,10 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-agent-core": ">=0.84.3",
+    "@earendil-works/pi-ai": ">=0.84.3",
+    "@earendil-works/pi-coding-agent": ">=0.84.3",
+    "@earendil-works/pi-tui": ">=0.84.3",
     "typebox": "*"
   },
   "peerDependenciesMeta": {

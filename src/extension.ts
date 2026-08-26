@@ -27,6 +27,7 @@ import {
   type DashboardAction,
   RunDetails,
 } from "./dashboard.ts";
+import { unavailableBotModelIds } from "./models.ts";
 import {
   loadWorkspace,
   MAX_ACTIVE_RUNS,
@@ -241,6 +242,15 @@ export default function piBotExtension(pi: ExtensionAPI) {
     ctx.ui.notify(`#${channel.name} created.`, "info");
   };
 
+  const assertModelsAvailable = (bots: readonly BotProfile[]) => {
+    if (!ctx) return;
+    const unavailableModels = unavailableBotModelIds(ctx, bots);
+    if (unavailableModels.length > 0)
+      throw new Error(
+        `Unavailable bot model: ${unavailableModels.join(", ")}. Edit the bot and choose a model from Pi's active registry.`,
+      );
+  };
+
   const assertRunCapacity = () => {
     if (
       workspace &&
@@ -257,6 +267,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
     if (!ctx || !workspace) return undefined;
     const bot = workspace.bots.find((item) => item.id === botId);
     if (!bot) throw new Error(`Unknown bot: ${botId}`);
+    assertModelsAvailable([bot]);
     const taskInput =
       providedTask ?? (await ctx.ui.editor(`Task for ${bot.name}`, ""));
     const task = taskInput?.trim();
@@ -463,6 +474,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
     const recipients = bot
       ? [bot]
       : channelRecipients(workspace.bots, targetId, content);
+    assertModelsAvailable(recipients);
     const busy = busyConversationRecipients(
       workspace,
       kind,

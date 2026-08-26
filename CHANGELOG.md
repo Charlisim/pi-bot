@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-08-26
+
+- Select bot models from Pi's active model registry instead of free text.
+- Show only reasoning effort levels supported by the selected model.
+- Reject unavailable legacy bot models before a task or message starts.
+
 ## 0.2.0 — 2026-08-26
 
 - Add one persistent direct conversation for each bot.

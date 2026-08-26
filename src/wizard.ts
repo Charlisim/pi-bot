@@ -6,15 +6,15 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import {
+  botModelKey,
+  defaultBotThinkingLevel,
+  selectableBotModels,
+  supportedBotThinkingLevels,
+} from "./models.ts";
 import { createBotId, createWorkspace, slugify } from "./store.ts";
 import { validateToolName } from "./tools.ts";
-import {
-  type BotProfile,
-  type Channel,
-  THINKING_LEVELS,
-  type ThinkingLevel,
-  type Workspace,
-} from "./types.ts";
+import type { BotProfile, Channel, ThinkingLevel, Workspace } from "./types.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const BUILDER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
@@ -78,25 +78,6 @@ async function askRequiredLine(
       "error",
     );
     return askRequiredLine(ctx, title, placeholder, maxLength, current);
-  }
-  return value;
-}
-
-async function askOptionalLine(
-  ctx: ExtensionContext,
-  title: string,
-  placeholder: string,
-  maxLength: number,
-): Promise<string | undefined> {
-  const raw = await ctx.ui.input(title, placeholder);
-  if (raw === undefined) return undefined;
-  const value = raw.trim();
-  if (value.includes("\n") || value.length > maxLength) {
-    ctx.ui.notify(
-      `${title} must be one line with at most ${maxLength} characters.`,
-      "error",
-    );
-    return askOptionalLine(ctx, title, placeholder, maxLength);
   }
   return value;
 }
@@ -173,16 +154,59 @@ async function chooseTools(
   }
 }
 
+async function chooseModel(ctx: ExtensionContext, current?: string) {
+  const models = selectableBotModels(ctx);
+  if (models.length === 0) {
+    ctx.ui.notify(
+      "Pi has no available models. Configure a provider or sign in first.",
+      "error",
+    );
+    return undefined;
+  }
+  const currentPiModel = ctx.model ? botModelKey(ctx.model) : undefined;
+  const saved = current
+    ? models.find((model) => botModelKey(model) === current)
+    : undefined;
+  if (current && !saved)
+    ctx.ui.notify(
+      `Saved model ${current} is unavailable. Choose a replacement.`,
+      "warning",
+    );
+  const initial =
+    saved ??
+    models.find((model) => botModelKey(model) === currentPiModel) ??
+    models[0];
+  if (!initial) return undefined;
+  const ordered = [initial, ...models.filter((model) => model !== initial)];
+  const byLabel = new Map(
+    ordered.map((model) => {
+      const key = botModelKey(model);
+      const name = model.name === model.id ? "" : ` — ${model.name}`;
+      const marker =
+        key === current
+          ? " (saved)"
+          : key === currentPiModel
+            ? " (current Pi model)"
+            : "";
+      return [`${key}${name}${marker}`, model] as const;
+    }),
+  );
+  const selected = await ctx.ui.select("6/7 · Model", [...byLabel.keys()]);
+  return selected ? byLabel.get(selected) : undefined;
+}
+
 async function chooseThinking(
   ctx: ExtensionContext,
-  current: ThinkingLevel,
+  model: ReturnType<typeof selectableBotModels>[number],
+  requested: ThinkingLevel | undefined,
 ): Promise<ThinkingLevel | undefined> {
-  const selected = await ctx.ui.select(
-    "Reasoning level",
-    THINKING_LEVELS.map((level) =>
-      level === current ? `${level} (current)` : level,
-    ),
-  );
+  const current = defaultBotThinkingLevel(model, requested);
+  const levels = supportedBotThinkingLevels(model);
+  const options = [
+    `${current} (current)`,
+    ...levels.filter((level) => level !== current),
+  ];
+  const selected = await ctx.ui.select("Reasoning effort", options);
   if (selected === undefined) return undefined;
   return selected.replace(" (current)", "") as ThinkingLevel;
 }
@@ -261,18 +285,15 @@ export async function runBotWizard(
   if (!instructions) return undefined;
   const tools = await chooseTools(ctx, existing?.tools);
   if (!tools) return undefined;
-  const preferredModelRaw = await askOptionalLine(
-    ctx,
-    "6/7 · Preferred provider/model (optional)",
-    existing?.modelPolicy.preferred ?? "Use the current Pi model",
-    200,
-  );
-  if (preferredModelRaw === undefined) return undefined;
-  const preferredModel = preferredModelRaw.trim();
-  const thinking = await chooseThinking(
-    ctx,
-    existing?.modelPolicy.thinking ?? "medium",
-  );
+  const model = await chooseModel(ctx, existing?.modelPolicy.preferred);
+  if (!model) return undefined;
+  const modelKey = botModelKey(model);
+  const requestedThinking =
+    existing?.modelPolicy.thinking ??
+    (ctx.model && botModelKey(ctx.model) === modelKey
+      ? ctx.thinkingLevel
+      : undefined);
+  const thinking = await chooseThinking(ctx, model, requestedThinking);
   if (!thinking) return undefined;
   const channelChoice = await ctx.ui.select("7/7 · Connect to a channel", [
     "No channel",
@@ -303,11 +324,7 @@ export async function runBotWizard(
     personality: { summary: personality, principles, boundaries },
     instructions,
     tools,
-    modelPolicy: {
-      ...(preferredModel ? { preferred: preferredModel } : {}),
-      fallback: [],
-      thinking,
-    },
+    modelPolicy: { preferred: modelKey, fallback: [], thinking },
     channelIds,
     activation: { manual: true, mentions },
     inheritProjectContext,
