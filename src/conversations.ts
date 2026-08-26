@@ -88,7 +88,11 @@ export function channelRecipients(
   channelId: string,
   message: string,
 ): BotProfile[] {
-  const assigned = bots.filter((bot) => bot.channelIds.includes(channelId));
+  const assigned = bots.filter(
+    (bot) =>
+      (bot.status ?? "active") === "active" &&
+      bot.channelIds.includes(channelId),
+  );
   const mentions = [
     ...message.matchAll(/(?<![a-z0-9._%+-])@([a-z0-9][a-z0-9-]{0,63})\b/gi),
   ].map((match) => match[1]?.toLowerCase());

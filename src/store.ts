@@ -17,6 +17,9 @@ import {
   type Conversation,
   type ConversationMessage,
   type RunRecord,
+  type TeamAuditReceipt,
+  type TeamGroup,
+  type TeamManagementPolicy,
   THINKING_LEVELS,
   type Workspace,
 } from "./types.ts";
@@ -29,6 +32,8 @@ const MAX_RUNS = 100;
 export const MAX_ACTIVE_RUNS = MAX_RUNS;
 const MAX_CONVERSATIONS = MAX_BOTS + MAX_CHANNELS;
 const MAX_CONVERSATION_MESSAGES = 10_000;
+const MAX_GROUPS = 100;
+const MAX_TEAM_AUDIT = 500;
 const MAX_MESSAGE_TEXT = 1_024 * 1_024;
 const MAX_STATE_BYTES = 16 * 1_024 * 1_024;
 const saveQueues = new Map<string, Promise<void>>();
@@ -93,6 +98,16 @@ function booleanValue(value: unknown, field: string): boolean {
   return value;
 }
 
+function boundedInteger(value: unknown, field: string, max: number): number {
+  if (
+    !Number.isInteger(value) ||
+    (value as number) < 0 ||
+    (value as number) > max
+  )
+    throw new Error(`${field} must be an integer between 0 and ${max}.`);
+  return value as number;
+}
+
 function record(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error(`${field} must be an object.`);
@@ -122,6 +137,40 @@ function parseChannel(value: unknown, index: number): Channel {
   };
 }
 
+function parseManagement(
+  value: unknown,
+  field: string,
+): TeamManagementPolicy | undefined {
+  if (value === undefined) return undefined;
+  const input = record(value, field);
+  const maxThinking = nonEmptyString(input.maxThinking, `${field}.maxThinking`);
+  if (!(THINKING_LEVELS as readonly string[]).includes(maxThinking))
+    throw new Error(`${field}.maxThinking is invalid.`);
+  return {
+    enabled: booleanValue(input.enabled, `${field}.enabled`),
+    allowedProviders: stringList(
+      input.allowedProviders,
+      `${field}.allowedProviders`,
+      64,
+    ),
+    allowedTools: stringList(input.allowedTools, `${field}.allowedTools`).map(
+      validateToolName,
+    ),
+    maxThinking: maxThinking as TeamManagementPolicy["maxThinking"],
+    maxDirectReports: boundedInteger(
+      input.maxDirectReports,
+      `${field}.maxDirectReports`,
+      100,
+    ),
+    maxTeamSize: boundedInteger(
+      input.maxTeamSize,
+      `${field}.maxTeamSize`,
+      MAX_BOTS,
+    ),
+    maxDepth: boundedInteger(input.maxDepth, `${field}.maxDepth`, 10),
+  };
+}
+
 function parseBot(value: unknown, index: number): BotProfile {
   const input = record(value, `bots[${index}]`);
   const personality = record(input.personality, `bots[${index}].personality`);
@@ -135,6 +184,16 @@ function parseBot(value: unknown, index: number): BotProfile {
     throw new Error(`bots[${index}].modelPolicy.thinking is not supported.`);
   const tools = stringList(input.tools, `bots[${index}].tools`).map(
     validateToolName,
+  );
+  const status =
+    input.status === undefined
+      ? "active"
+      : nonEmptyString(input.status, `bots[${index}].status`);
+  if (status !== "active" && status !== "archived")
+    throw new Error(`bots[${index}].status is invalid.`);
+  const management = parseManagement(
+    input.management,
+    `bots[${index}].management`,
   );
   return {
     id: botId(input.id, `bots[${index}].id`),
@@ -202,6 +261,43 @@ function parseBot(value: unknown, index: number): BotProfile {
       input.inheritProjectContext,
       `bots[${index}].inheritProjectContext`,
     ),
+    ...(optionalString(input.parentId, `bots[${index}].parentId`, 64)
+      ? { parentId: botId(input.parentId, `bots[${index}].parentId`) }
+      : {}),
+    ...(optionalString(input.groupId, `bots[${index}].groupId`, 64)
+      ? { groupId: botId(input.groupId, `bots[${index}].groupId`) }
+      : {}),
+    status,
+    lifetime:
+      input.lifetime === undefined
+        ? { kind: "permanent" }
+        : (() => {
+            const lifetime = record(input.lifetime, `bots[${index}].lifetime`);
+            const kind = nonEmptyString(
+              lifetime.kind,
+              `bots[${index}].lifetime.kind`,
+            );
+            if (kind !== "permanent" && kind !== "temporary")
+              throw new Error(`bots[${index}].lifetime.kind is invalid.`);
+            const expiresAt = optionalString(
+              lifetime.expiresAt,
+              `bots[${index}].lifetime.expiresAt`,
+            );
+            if (kind === "temporary" && !expiresAt)
+              throw new Error(`bots[${index}].lifetime.expiresAt is required.`);
+            return {
+              kind,
+              ...(expiresAt
+                ? {
+                    expiresAt: isoDate(
+                      expiresAt,
+                      `bots[${index}].lifetime.expiresAt`,
+                    ),
+                  }
+                : {}),
+            };
+          })(),
+    ...(management ? { management } : {}),
     version:
       Number.isInteger(input.version) && (input.version as number) > 0
         ? (input.version as number)
@@ -341,6 +437,52 @@ function parseRun(value: unknown, index: number): RunRecord {
   };
 }
 
+function parseGroup(value: unknown, index: number): TeamGroup {
+  const field = `groups[${index}]`;
+  const input = record(value, field);
+  const status =
+    input.status === undefined
+      ? "active"
+      : nonEmptyString(input.status, `${field}.status`);
+  if (status !== "active" && status !== "archived")
+    throw new Error(`${field}.status is invalid.`);
+  return {
+    id: botId(input.id, `${field}.id`),
+    name: nonEmptyString(input.name, `${field}.name`, 80),
+    purpose: nonEmptyString(input.purpose, `${field}.purpose`, 500),
+    managerId: botId(input.managerId, `${field}.managerId`),
+    status,
+    createdAt: isoDate(input.createdAt, `${field}.createdAt`),
+  };
+}
+
+function parseAudit(value: unknown, index: number): TeamAuditReceipt {
+  const field = `teamAudit[${index}]`;
+  const input = record(value, field);
+  const action = nonEmptyString(input.action, `${field}.action`);
+  if (
+    !(
+      [
+        "hire",
+        "create_group",
+        "archive",
+        "restore",
+        "expire",
+        "delegate",
+      ] as const
+    ).includes(action as never)
+  )
+    throw new Error(`${field}.action is invalid.`);
+  return {
+    id: nonEmptyString(input.id, `${field}.id`, 128),
+    actorId: nonEmptyString(input.actorId, `${field}.actorId`, 64),
+    action: action as TeamAuditReceipt["action"],
+    targetId: nonEmptyString(input.targetId, `${field}.targetId`, 64),
+    summary: nonEmptyString(input.summary, `${field}.summary`, 500),
+    createdAt: isoDate(input.createdAt, `${field}.createdAt`),
+  };
+}
+
 export function parseWorkspace(value: unknown): Workspace {
   const input = record(value, "workspace");
   if (input.schemaVersion !== 1)
@@ -352,6 +494,12 @@ export function parseWorkspace(value: unknown): Workspace {
   if (!Array.isArray(input.runs) || input.runs.length > MAX_RUNS)
     throw new Error(`runs must contain at most ${MAX_RUNS} items.`);
   const conversations = input.conversations ?? [];
+  const groups = input.groups ?? [];
+  const teamAudit = input.teamAudit ?? [];
+  if (!Array.isArray(groups) || groups.length > MAX_GROUPS)
+    throw new Error(`groups must contain at most ${MAX_GROUPS} items.`);
+  if (!Array.isArray(teamAudit) || teamAudit.length > MAX_TEAM_AUDIT)
+    throw new Error(`teamAudit must contain at most ${MAX_TEAM_AUDIT} items.`);
   if (!Array.isArray(conversations) || conversations.length > MAX_CONVERSATIONS)
     throw new Error(
       `conversations must contain at most ${MAX_CONVERSATIONS} items.`,
@@ -368,6 +516,8 @@ export function parseWorkspace(value: unknown): Workspace {
     channels: input.channels.map(parseChannel),
     runs: input.runs.map(parseRun),
     conversations: conversations.map(parseConversation),
+    groups: groups.map(parseGroup),
+    teamAudit: teamAudit.map(parseAudit),
     createdAt: isoDate(input.createdAt, "createdAt"),
     updatedAt: isoDate(input.updatedAt, "updatedAt"),
   };
@@ -403,6 +553,108 @@ export function parseWorkspace(value: unknown): Workspace {
     throw new Error(
       `conversations must contain at most ${MAX_CONVERSATION_MESSAGES} total messages.`,
     );
+  const botIds = new Set(workspace.bots.map((bot) => bot.id));
+  const groupIds = new Set(workspace.groups.map((group) => group.id));
+  if (
+    workspace.bots.some(
+      (bot) =>
+        bot.parentId && (!botIds.has(bot.parentId) || bot.parentId === bot.id),
+    )
+  )
+    throw new Error("Every bot parent must exist and differ from the bot.");
+  if (workspace.bots.some((bot) => bot.groupId && !groupIds.has(bot.groupId)))
+    throw new Error("Every bot group must exist.");
+  if (workspace.groups.some((group) => !botIds.has(group.managerId)))
+    throw new Error("Every group manager must exist.");
+  for (const bot of workspace.bots) {
+    const seen = new Set<string>();
+    let current: BotProfile | undefined = bot;
+    while (current?.parentId) {
+      if (seen.has(current.parentId))
+        throw new Error("Bot hierarchy must not contain cycles.");
+      seen.add(current.parentId);
+      current = workspace.bots.find((item) => item.id === current?.parentId);
+    }
+    if (!bot.parentId) continue;
+    const parent = workspace.bots.find((item) => item.id === bot.parentId);
+    if (!parent?.management?.enabled)
+      throw new Error("Every managed descendant requires a managing parent.");
+    if (
+      (bot.status ?? "active") === "active" &&
+      (parent.status ?? "active") !== "active"
+    )
+      throw new Error("An active bot cannot have an archived parent.");
+    const modelProviders = [
+      bot.modelPolicy.preferred,
+      ...bot.modelPolicy.fallback,
+    ].map((model) => model?.split("/")[0]);
+    if (
+      modelProviders.length === 0 ||
+      modelProviders.some(
+        (provider) =>
+          !provider || !parent.management?.allowedProviders.includes(provider),
+      )
+    )
+      throw new Error("Descendant models must stay within the parent cap.");
+    if (
+      bot.tools.some((tool) => !parent.management?.allowedTools.includes(tool))
+    )
+      throw new Error("Descendant tools must stay within the parent cap.");
+    if (
+      THINKING_LEVELS.indexOf(bot.modelPolicy.thinking) >
+      THINKING_LEVELS.indexOf(parent.management.maxThinking)
+    )
+      throw new Error("Descendant thinking must stay within the parent cap.");
+    if (bot.management?.enabled) {
+      const childPolicy = bot.management;
+      const parentPolicy = parent.management;
+      if (
+        childPolicy.allowedProviders.some(
+          (provider) => !parentPolicy.allowedProviders.includes(provider),
+        ) ||
+        childPolicy.allowedTools.some(
+          (tool) => !parentPolicy.allowedTools.includes(tool),
+        ) ||
+        THINKING_LEVELS.indexOf(childPolicy.maxThinking) >
+          THINKING_LEVELS.indexOf(parentPolicy.maxThinking) ||
+        childPolicy.maxDirectReports > parentPolicy.maxDirectReports ||
+        childPolicy.maxTeamSize > Math.max(0, parentPolicy.maxTeamSize - 1) ||
+        childPolicy.maxDepth > Math.max(0, parentPolicy.maxDepth - 1)
+      )
+        throw new Error("Descendant management caps must be monotonic.");
+    }
+  }
+  for (const manager of workspace.bots.filter(
+    (bot) => bot.management?.enabled,
+  )) {
+    const policy = manager.management;
+    if (!policy) continue;
+    const direct = workspace.bots.filter(
+      (bot) =>
+        bot.parentId === manager.id && (bot.status ?? "active") === "active",
+    );
+    if (direct.length > policy.maxDirectReports)
+      throw new Error("A manager exceeds its direct-report cap.");
+    const queue = direct.map((bot) => ({ bot, depth: 1 }));
+    let activeDescendants = 0;
+    let maximumDepth = 0;
+    while (queue.length > 0) {
+      const entry = queue.shift();
+      if (!entry) break;
+      activeDescendants += 1;
+      maximumDepth = Math.max(maximumDepth, entry.depth);
+      for (const child of workspace.bots.filter(
+        (bot) =>
+          bot.parentId === entry.bot.id &&
+          (bot.status ?? "active") === "active",
+      ))
+        queue.push({ bot: child, depth: entry.depth + 1 });
+    }
+    if (activeDescendants > policy.maxTeamSize)
+      throw new Error("A manager exceeds its team-size cap.");
+    if (maximumDepth > policy.maxDepth)
+      throw new Error("A manager exceeds its team-depth cap.");
+  }
   const channelIds = new Set(workspace.channels.map((channel) => channel.id));
   if (
     workspace.bots.some((bot) =>
@@ -630,6 +882,8 @@ export function createWorkspace(
     ],
     runs: [],
     conversations: [],
+    groups: [],
+    teamAudit: [],
     createdAt,
     updatedAt: createdAt,
   };

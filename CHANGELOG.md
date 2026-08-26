@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-08-26
+
+- Add hierarchical teams with inherited management caps.
+- Add child-only team inspection, model catalog, hiring, grouping, archiving, and delegation tools.
+- Add authenticated localhost team control with per-run actor tokens.
+- Add temporary bot expiry, bounded audit receipts, archived profiles, and restore actions.
+
 ## 0.2.2 — 2026-08-26
 
 - Select a provider before selecting a bot model.

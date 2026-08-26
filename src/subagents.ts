@@ -154,7 +154,13 @@ export class SubagentsClient {
   }
 
   async spawn(
-    input: { agent: string; task: string; cwd: string; output?: string },
+    input: {
+      agent: string;
+      task: string;
+      cwd: string;
+      output?: string;
+      extensionBindings?: Record<string, unknown>;
+    },
     timeoutMs = 10_000,
   ): Promise<string> {
     const data = await this.request(
@@ -166,6 +172,9 @@ export class SubagentsClient {
         context: "fresh",
         agentScope: "user",
         async: true,
+        ...(input.extensionBindings
+          ? { extensionBindings: input.extensionBindings }
+          : {}),
         ...(input.output
           ? { output: input.output, outputMode: "file-only" }
           : {}),
@@ -208,6 +217,7 @@ export class SubagentsClient {
     runId: string,
     message: string,
     output?: string,
+    extensionBindings?: Record<string, unknown>,
     timeoutMs = 10_000,
   ): Promise<string> {
     return runIdFromData(
@@ -216,6 +226,7 @@ export class SubagentsClient {
         {
           id: runId,
           message,
+          ...(extensionBindings ? { extensionBindings } : {}),
           ...(output ? { output, outputMode: "file-only" } : {}),
         },
         timeoutMs,

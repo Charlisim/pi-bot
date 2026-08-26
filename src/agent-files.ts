@@ -102,7 +102,9 @@ export async function stageWorkspaceAgents(
   await ensureOwnedDirectory(stage);
 
   try {
-    for (const bot of workspace.bots) {
+    for (const bot of workspace.bots.filter(
+      (item) => (item.status ?? "active") === "active",
+    )) {
       await writeProfile(
         join(stage, `${bot.id}.md`),
         serializeRuntimeAgent(bot, workspace.projectPath),
@@ -149,7 +151,9 @@ export async function stageWorkspaceAgents(
       settled = true;
       await rm(stage, { recursive: true, force: true });
       await rm(backup, { recursive: true, force: true });
-      if (workspace.bots.length === 0)
+      if (
+        !workspace.bots.some((item) => (item.status ?? "active") === "active")
+      )
         await rm(target, { recursive: true, force: true });
       const remaining = await readdir(stagingBase).catch(() => []);
       if (remaining.length === 0)

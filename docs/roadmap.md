@@ -22,7 +22,14 @@ Pi Bot follows a local-first path. Each phase must keep one source of truth and 
 - Run detail and stop/steer controls through public pi-subagents RPC.
 - Import and export after a reviewed schema contract.
 
-## 0.3 — Automations
+## 0.3 — Managed teams
+
+- [x] Parent-linked managers and groups.
+- [x] Inherited provider, tool, effort, size, and depth caps.
+- [x] Manager hiring, inspection, archiving, catalog, and delegation tools.
+- [x] Temporary expiry, audit receipts, and restore actions.
+
+## 0.4 — Automations
 
 - Durable schedules.
 - Signed GitHub and generic webhook envelopes.

@@ -14,7 +14,13 @@ import {
 } from "./models.ts";
 import { createBotId, createWorkspace, slugify } from "./store.ts";
 import { validateToolName } from "./tools.ts";
-import type { BotProfile, Channel, ThinkingLevel, Workspace } from "./types.ts";
+import {
+  type BotProfile,
+  type Channel,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+  type Workspace,
+} from "./types.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const BUILDER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
@@ -116,22 +122,35 @@ function parseToolList(raw: string): string[] {
 async function chooseTools(
   ctx: ExtensionContext,
   current?: readonly string[],
+  allowedTools?: readonly string[],
 ): Promise<string[] | undefined> {
-  const choice = await ctx.ui.select("Choose an authority profile", [
+  const allowed = allowedTools ? new Set(allowedTools) : undefined;
+  const advisoryTools = READ_ONLY_TOOLS.filter(
+    (tool) => !allowed || allowed.has(tool),
+  );
+  const builderTools = BUILDER_TOOLS.filter(
+    (tool) => !allowed || allowed.has(tool),
+  );
+  const options = [
     "No tools — conversation only (Recommended)",
-    "Advisory — read, grep, find, ls",
-    "Builder — shell and workspace writes",
+    ...(advisoryTools.length > 0
+      ? [`Advisory — ${advisoryTools.join(", ")}`]
+      : []),
+    ...(builderTools.some((tool) => !READ_ONLY_TOOLS.includes(tool))
+      ? ["Builder — permitted shell and workspace writes"]
+      : []),
     "Custom — explicit built-in tool names",
-  ]);
+  ];
+  const choice = await ctx.ui.select("Choose an authority profile", options);
   if (choice === undefined) return undefined;
   if (choice.startsWith("No tools")) return [];
-  if (choice.startsWith("Advisory")) return READ_ONLY_TOOLS;
+  if (choice.startsWith("Advisory")) return advisoryTools;
   if (choice.startsWith("Builder")) {
     const confirmed = await ctx.ui.confirm(
       "Grant workspace write access?",
       "Builder tools can run shell commands and modify files. Personality instructions cannot contain this authority.",
     );
-    return confirmed ? BUILDER_TOOLS : chooseTools(ctx, current);
+    return confirmed ? builderTools : chooseTools(ctx, current, allowedTools);
   }
   const raw = await ctx.ui.input(
     "Comma-separated tool names",
@@ -140,17 +159,19 @@ async function chooseTools(
   if (raw === undefined) return undefined;
   try {
     const tools = parseToolList(raw);
+    if (allowed && tools.some((tool) => !allowed.has(tool)))
+      throw new Error("Selected tools exceed the inherited manager cap.");
     const confirmed = await ctx.ui.confirm(
       "Grant these custom tools?",
       `${tools.join(", ") || "No tools"}\n\nAny tool outside the advisory set is treated as elevated.`,
     );
-    return confirmed ? tools : chooseTools(ctx, current);
+    return confirmed ? tools : chooseTools(ctx, current, allowedTools);
   } catch (error) {
     ctx.ui.notify(
       error instanceof Error ? error.message : String(error),
       "error",
     );
-    return chooseTools(ctx, current);
+    return chooseTools(ctx, current, allowedTools);
   }
 }
 
@@ -158,8 +179,14 @@ const MODEL_PAGE_SIZE = 10;
 const PREVIOUS_MODELS = "← Previous 10 models";
 const NEXT_MODELS = "Next 10 models →";
 
-async function chooseModel(ctx: ExtensionContext, current?: string) {
-  const models = selectableBotModels(ctx);
+async function chooseModel(
+  ctx: ExtensionContext,
+  current?: string,
+  allowedProviders?: readonly string[],
+) {
+  const models = selectableBotModels(ctx).filter(
+    (model) => !allowedProviders || allowedProviders.includes(model.provider),
+  );
   if (models.length === 0) {
     ctx.ui.notify(
       "Pi has no available models. Configure a provider or sign in first.",
@@ -259,9 +286,17 @@ async function chooseThinking(
   ctx: ExtensionContext,
   model: ReturnType<typeof selectableBotModels>[number],
   requested: ThinkingLevel | undefined,
+  maximum?: ThinkingLevel,
 ): Promise<ThinkingLevel | undefined> {
-  const current = defaultBotThinkingLevel(model, requested);
-  const levels = supportedBotThinkingLevels(model);
+  const levels = supportedBotThinkingLevels(model).filter(
+    (level) =>
+      !maximum ||
+      THINKING_LEVELS.indexOf(level) <= THINKING_LEVELS.indexOf(maximum),
+  );
+  const requestedLevel = defaultBotThinkingLevel(model, requested);
+  const current = levels.includes(requestedLevel)
+    ? requestedLevel
+    : (levels.at(-1) ?? "off");
   const options = [
     `${current} (current)`,
     ...levels.filter((level) => level !== current),
@@ -343,9 +378,21 @@ export async function runBotWizard(
     existing?.instructions ?? "",
   );
   if (!instructions) return undefined;
-  const tools = await chooseTools(ctx, existing?.tools);
+  const parent = existing?.parentId
+    ? workspace.bots.find((bot) => bot.id === existing.parentId)
+    : undefined;
+  const inherited = parent?.management?.enabled ? parent.management : undefined;
+  const tools = await chooseTools(
+    ctx,
+    existing?.tools,
+    inherited?.allowedTools,
+  );
   if (!tools) return undefined;
-  const model = await chooseModel(ctx, existing?.modelPolicy.preferred);
+  const model = await chooseModel(
+    ctx,
+    existing?.modelPolicy.preferred,
+    inherited?.allowedProviders,
+  );
   if (!model) return undefined;
   const modelKey = botModelKey(model);
   const requestedThinking =
@@ -353,8 +400,61 @@ export async function runBotWizard(
     (ctx.model && botModelKey(ctx.model) === modelKey
       ? ctx.thinkingLevel
       : undefined);
-  const thinking = await chooseThinking(ctx, model, requestedThinking);
+  const thinking = await chooseThinking(
+    ctx,
+    model,
+    requestedThinking,
+    inherited?.maxThinking,
+  );
   if (!thinking) return undefined;
+  const manageTeam = await ctx.ui.confirm(
+    "Allow this bot to manage a team?",
+    "Managers can hire, group, archive, and delegate to descendants within inherited caps. Prompt text cannot expand these limits.",
+  );
+  const availableProviders = [
+    ...new Set(selectableBotModels(ctx).map((item) => item.provider)),
+  ];
+  if (manageTeam && parent && !inherited) {
+    ctx.ui.notify("The parent bot cannot delegate team management.", "error");
+    return undefined;
+  }
+  const providerCap = inherited?.allowedProviders ?? availableProviders;
+  const toolCap = inherited?.allowedTools ?? tools;
+  const existingProviders =
+    existing?.management?.allowedProviders ?? providerCap;
+  const existingTools = existing?.management?.allowedTools ?? toolCap;
+  const maxThinking = inherited
+    ? (THINKING_LEVELS[
+        Math.min(
+          THINKING_LEVELS.indexOf(thinking),
+          THINKING_LEVELS.indexOf(inherited.maxThinking),
+        )
+      ] ?? "off")
+    : thinking;
+  const management = manageTeam
+    ? {
+        enabled: true,
+        allowedProviders: existingProviders.filter(
+          (provider) =>
+            availableProviders.includes(provider) &&
+            providerCap.includes(provider),
+        ),
+        allowedTools: existingTools.filter((tool) => toolCap.includes(tool)),
+        maxThinking,
+        maxDirectReports: Math.min(
+          existing?.management?.maxDirectReports ?? 5,
+          inherited?.maxDirectReports ?? 100,
+        ),
+        maxTeamSize: Math.min(
+          existing?.management?.maxTeamSize ?? 20,
+          inherited ? Math.max(0, inherited.maxTeamSize - 1) : 100,
+        ),
+        maxDepth: Math.min(
+          existing?.management?.maxDepth ?? 3,
+          inherited ? Math.max(0, inherited.maxDepth - 1) : 10,
+        ),
+      }
+    : undefined;
   const channelChoice = await ctx.ui.select("8/8 · Connect to a channel", [
     "No channel",
     ...workspace.channels.map((channel) => `#${channel.name}`),
@@ -388,6 +488,11 @@ export async function runBotWizard(
     channelIds,
     activation: { manual: true, mentions },
     inheritProjectContext,
+    ...(existing?.parentId ? { parentId: existing.parentId } : {}),
+    ...(existing?.groupId ? { groupId: existing.groupId } : {}),
+    status: existing?.status ?? "active",
+    lifetime: existing?.lifetime ?? { kind: "permanent" },
+    ...(management ? { management } : {}),
     version: existing ? existing.version + 1 : 1,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -399,6 +504,7 @@ export async function runBotWizard(
     `Model: ${candidate.modelPolicy.preferred || "current Pi model"} · thinking ${candidate.modelPolicy.thinking}`,
     `Channels: ${candidate.channelIds.length > 0 ? candidate.channelIds.map((id) => `#${workspace.channels.find((channel) => channel.id === id)?.name ?? id}`).join(", ") : "none"}`,
     `Project context: ${candidate.inheritProjectContext ? "enabled" : "disabled"}`,
+    `Team management: ${candidate.management?.enabled ? `${candidate.management.maxDirectReports} direct · ${candidate.management.maxTeamSize} team · depth ${candidate.management.maxDepth}` : "disabled"}`,
   ].join("\n");
   const save = await ctx.ui.confirm(
     existing ? "Save changes?" : "Create this bot?",

@@ -2,7 +2,7 @@
 
 **Build your own AI agent desk inside [Pi](https://pi.dev).**
 
-Pi Bot is an open-source Pi package for creating custom agents with their own identity, role, personality, operating instructions, tools, model policy, channels, and activation settings. It ships with **no default agents** and runs nothing until you create one.
+Pi Bot is an open-source Pi package for creating custom agents with their own identity, role, personality, operating instructions, tools, model policy, channels, activation settings, and bounded team-management authority. It ships with **no default agents** and runs nothing until you create one.
 
 ![Pi Bot dashboard](docs/images/pi-bot-dashboard.svg)
 
@@ -29,7 +29,7 @@ Install the execution engine and Pi Bot:
 
 ```bash
 pi install npm:pi-subagents@0.57.0
-pi install git:github.com/Charlisim/pi-bot@v0.2.0
+pi install git:github.com/Charlisim/pi-bot@v0.3.0
 ```
 
 Restart Pi, or run:
@@ -87,7 +87,7 @@ Press `Ctrl+Shift+B` to open the dashboard. Use `←` and `→` to move between 
 
 ## Conversations
 
-A bot has one direct conversation per project. Each new message continues the bot's prior runtime session when pi-subagents can resume it. Pi Bot falls back to the saved conversation history when the prior runtime session is no longer available.
+A bot has one direct conversation per project. Ordinary bots continue their prior runtime session when pi-subagents can resume it. Managers start a fresh run with saved conversation history so each run receives a new team-control token.
 
 A channel keeps one shared local conversation. Press `Enter` inside a bot or channel conversation to open Pi's multiline editor.
 
@@ -102,6 +102,10 @@ Conversation history is not pruned automatically. The local state safety limits 
 ![Pi Bot channel conversation](docs/images/pi-bot-conversation.svg)
 
 The model-facing `pi_bot` tool can list bots. It can launch a bot only after an interactive human confirmation.
+
+## Managed teams
+
+A bot can receive explicit team-management authority. Managers can inspect their subtree, search the active model catalog, hire descendants, create groups, archive descendants, and delegate tasks. Descendants can never widen inherited provider, tool, effort, team-size, or depth caps. Team changes run through an authenticated parent-owned control bridge and leave bounded audit receipts. Archived bots keep history and can be restored with `U` from the dashboard.
 
 ## Authority profiles
 

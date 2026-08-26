@@ -26,6 +26,21 @@ export interface ActivationSettings {
   mentions: boolean;
 }
 
+export interface TeamManagementPolicy {
+  enabled: boolean;
+  allowedProviders: string[];
+  allowedTools: string[];
+  maxThinking: ThinkingLevel;
+  maxDirectReports: number;
+  maxTeamSize: number;
+  maxDepth: number;
+}
+
+export interface BotLifetime {
+  kind: "permanent" | "temporary";
+  expiresAt?: string;
+}
+
 export interface BotProfile {
   id: string;
   name: string;
@@ -38,6 +53,11 @@ export interface BotProfile {
   channelIds: string[];
   activation: ActivationSettings;
   inheritProjectContext: boolean;
+  parentId?: string;
+  groupId?: string;
+  status?: "active" | "archived";
+  lifetime?: BotLifetime;
+  management?: TeamManagementPolicy;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -97,6 +117,30 @@ export interface Conversation {
   updatedAt: string;
 }
 
+export interface TeamGroup {
+  id: string;
+  name: string;
+  purpose: string;
+  managerId: string;
+  status: "active" | "archived";
+  createdAt: string;
+}
+
+export interface TeamAuditReceipt {
+  id: string;
+  actorId: string;
+  action:
+    | "hire"
+    | "create_group"
+    | "archive"
+    | "restore"
+    | "expire"
+    | "delegate";
+  targetId: string;
+  summary: string;
+  createdAt: string;
+}
+
 export interface Workspace {
   schemaVersion: 1;
   name: string;
@@ -106,6 +150,8 @@ export interface Workspace {
   channels: Channel[];
   runs: RunRecord[];
   conversations: Conversation[];
+  groups: TeamGroup[];
+  teamAudit: TeamAuditReceipt[];
   createdAt: string;
   updatedAt: string;
 }

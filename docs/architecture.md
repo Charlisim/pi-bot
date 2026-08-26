@@ -67,7 +67,7 @@ subagents:rpc:v1:ready
 subagent:async-complete
 ```
 
-Requests subscribe to the correlated reply before they emit. Timeouts and shutdown remove listeners. Launches are detached and asynchronous. Direct conversations and each bot lane in a channel keep the latest run ID and a digest of the effective bot profile. Pi Bot resumes only when that digest still matches. A fresh run receives saved history when the prior run is definitively unavailable or the profile changed.
+Requests subscribe to the correlated reply before they emit. Timeouts and shutdown remove listeners. Launches are detached and asynchronous. Direct conversations and each bot lane in a channel keep the latest run ID and a digest of the effective bot profile. Pi Bot resumes ordinary bots only when that digest still matches. Managers always start a fresh child with saved conversation history so each run receives a new control token and binding.
 
 Each conversation launch writes its final response to a private package-owned response file. Pi Bot folds that response into the atomic workspace state and removes the file. This lets startup reconciliation recover a completed response that arrived while the TUI was unavailable.
 
@@ -85,3 +85,7 @@ Tool authority comes from an explicit human selection. Pi Bot denies recursive o
 - Detached runs can outlive the owning Pi session. Startup reconciliation recovers a saved final response when the child wrote one. It keeps the receipt pending when neither a terminal status nor a response file proves completion.
 - New profiles select a provider and then an exact model from Pi's active or session-scoped registry. Model pages contain at most ten entries. Legacy unavailable IDs fail before a task or conversation message starts.
 - Local channels are persistent project conversations. They are not external chat transports.
+
+## Team control plane
+
+Managed bots form a parent-linked tree. Each manager has inherited caps for providers, tools, reasoning effort, direct reports, subtree size, and depth. Descendant caps can only narrow. Manager profiles load a child-only runtime extension with `team_inspect`, `team_catalog`, `team_change`, and `team_delegate`; they never receive the recursive subagent tool. These tools use per-launch extension bindings to reach a private parent-owned localhost bridge. The parent maps bearer tokens to actors, validates every request, and applies state plus runtime-profile changes through the existing transaction queue. Archived bots keep history and do not publish runtime profiles.

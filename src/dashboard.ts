@@ -22,6 +22,7 @@ export type DashboardAction =
   | { type: "create-bot" }
   | { type: "edit-bot"; botId: string }
   | { type: "delete-bot"; botId: string }
+  | { type: "restore-bot"; botId: string }
   | { type: "run-bot"; botId: string }
   | { type: "inspect-bot"; botId: string }
   | { type: "inspect-channel"; channelId: string }
@@ -61,8 +62,14 @@ function botRow(
       : authority === "advisory"
         ? theme.fg("success", "advisory")
         : theme.fg("muted", "no tools");
+  const state =
+    (bot.status ?? "active") === "archived"
+      ? theme.fg("warning", "archived")
+      : bot.management?.enabled
+        ? theme.fg("accent", "manager")
+        : "";
   return truncateToWidth(
-    `${marker} ${name}  ${theme.fg("muted", stripTerminalSequences(bot.role))}  ${permission}`,
+    `${marker} ${name}  ${theme.fg("muted", stripTerminalSequences(bot.role))}  ${permission}${state ? `  ${state}` : ""}`,
     width,
     "…",
   );
@@ -420,6 +427,8 @@ export class Dashboard implements Component {
     if (!bot) return;
     if (key === "r") this.onAction({ type: "run-bot", botId: bot.id });
     else if (key === "e") this.onAction({ type: "edit-bot", botId: bot.id });
+    else if (key === "u" && (bot.status ?? "active") === "archived")
+      this.onAction({ type: "restore-bot", botId: bot.id });
     else if (key === "d") this.onAction({ type: "delete-bot", botId: bot.id });
   }
 

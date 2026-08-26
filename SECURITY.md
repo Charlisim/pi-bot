@@ -30,3 +30,7 @@ Pi Bot reduces accidental authority by:
 - Avoiding credentials, raw transcripts, and tool output in its state. Profiles, task receipts, conversation messages, and final bot responses are stored verbatim and must not contain secrets.
 
 Users remain responsible for the models, tools, extensions, repositories, and credentials they enable.
+
+## Managed-team control
+
+Manager prompts do not grant authority. Child-only team tools use a bounded parent-owned localhost bridge. Each launch receives a random bearer token mapped to its actor on the server. The child cannot choose its actor identity. The parent validates descendant ownership and inherited caps, serializes state and profile changes, and revokes tokens after completion or shutdown. Autonomous removal archives profiles and preserves history.

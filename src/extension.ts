@@ -27,7 +27,12 @@ import {
   type DashboardAction,
   RunDetails,
 } from "./dashboard.ts";
-import { unavailableBotModelIds } from "./models.ts";
+import {
+  botModelKey,
+  selectableBotModels,
+  supportedBotThinkingLevels,
+  unavailableBotModelIds,
+} from "./models.ts";
 import {
   loadWorkspace,
   MAX_ACTIVE_RUNS,
@@ -38,13 +43,27 @@ import {
   saveWorkspace,
 } from "./store.ts";
 import { type CompletionEvent, SubagentsClient } from "./subagents.ts";
+import {
+  applyTeamChange,
+  archiveExpiredBots,
+  descendantIds,
+  inspectTeam,
+  restoreBot,
+  type TeamChangeRequest,
+} from "./team.ts";
+import {
+  TeamControlBridge,
+  type TeamControlRequest,
+  type TeamControlResponse,
+} from "./team-control.ts";
 import { classifyAuthority } from "./tools.ts";
-import type {
-  BotProfile,
-  ConversationKind,
-  RunRecord,
-  Workspace,
-  WorkspaceSnapshot,
+import {
+  type BotProfile,
+  type ConversationKind,
+  type RunRecord,
+  THINKING_LEVELS,
+  type Workspace,
+  type WorkspaceSnapshot,
 } from "./types.ts";
 import { runBotWizard, runChannelWizard, runOnboarding } from "./wizard.ts";
 
@@ -84,7 +103,18 @@ export default function piBotExtension(pi: ExtensionAPI) {
   let activeConversationRender: (() => void) | undefined;
   const earlyCompletions = new Map<string, CompletionEvent>();
   const pendingResponseIds = new Map<string, string>();
+  const pendingConversationBots = new Set<string>();
+  const teamTokenRevokers = new Map<string, () => void>();
   const client = new SubagentsClient(pi.events);
+  let handleTeamControl: (
+    actorId: string,
+    request: TeamControlRequest,
+  ) => Promise<TeamControlResponse> = async () => {
+    throw new Error("Pi Bot team control is not ready.");
+  };
+  const teamBridge = new TeamControlBridge((actorId, request) =>
+    handleTeamControl(actorId, request),
+  );
 
   const updateSurface = () => {
     if (!ctx) return;
@@ -187,6 +217,14 @@ export default function piBotExtension(pi: ExtensionAPI) {
       await persistWorkspace(candidate);
     });
 
+  const expireTemporaryBots = (): Promise<void> =>
+    serializeMutation(async () => {
+      if (!workspace) return;
+      const candidate = cloneWorkspace(workspace);
+      if (archiveExpiredBots(candidate).length > 0)
+        await persistWorkspace(candidate);
+    });
+
   const ensureWorkspace = async (): Promise<Workspace | undefined> => {
     if (workspace) return workspace;
     if (!ctx) return undefined;
@@ -230,6 +268,12 @@ export default function piBotExtension(pi: ExtensionAPI) {
     ctx.ui.notify(`${bot.name} deleted.`, "info");
   };
 
+  const restoreArchivedBot = async (botId: string) => {
+    if (!ctx || !workspace) return;
+    await mutateWorkspace((candidate) => restoreBot(candidate, botId));
+    ctx.ui.notify(`${botId} restored.`, "info");
+  };
+
   const createChannel = async () => {
     if (!ctx) return;
     const current = await ensureWorkspace();
@@ -251,6 +295,15 @@ export default function piBotExtension(pi: ExtensionAPI) {
       );
   };
 
+  const issueTeamBinding = async (bot: BotProfile) => {
+    if (!bot.management?.enabled) return undefined;
+    const issued = await teamBridge.issue(bot.id);
+    return {
+      bindings: { [issued.namespace]: issued.value },
+      revoke: issued.revoke,
+    };
+  };
+
   const assertRunCapacity = () => {
     if (
       workspace &&
@@ -265,8 +318,11 @@ export default function piBotExtension(pi: ExtensionAPI) {
     providedTask?: string,
   ): Promise<string | undefined> => {
     if (!ctx || !workspace) return undefined;
+    await expireTemporaryBots();
     const bot = workspace.bots.find((item) => item.id === botId);
     if (!bot) throw new Error(`Unknown bot: ${botId}`);
+    if ((bot.status ?? "active") !== "active")
+      throw new Error(`${bot.name} is archived.`);
     assertModelsAvailable([bot]);
     const taskInput =
       providedTask ?? (await ctx.ui.editor(`Task for ${bot.name}`, ""));
@@ -284,12 +340,15 @@ export default function piBotExtension(pi: ExtensionAPI) {
     assertRunCapacity();
     pendingRunReceipts += 1;
     let runId: string | undefined;
+    const teamBinding = await issueTeamBinding(bot);
     try {
       runId = await client.spawn({
         agent: runtimeAgentName(workspace.projectPath, bot.id),
         task,
         cwd: ctx.cwd,
+        ...(teamBinding ? { extensionBindings: teamBinding.bindings } : {}),
       });
+      if (teamBinding) teamTokenRevokers.set(runId, teamBinding.revoke);
       const launchedRunId = runId;
       const now = new Date().toISOString();
       const run: RunRecord = {
@@ -317,8 +376,16 @@ export default function piBotExtension(pi: ExtensionAPI) {
         }
         throw error;
       }
+      if (run.status !== "launched") {
+        teamTokenRevokers.get(launchedRunId)?.();
+        teamTokenRevokers.delete(launchedRunId);
+      }
       ctx.ui.notify(`${bot.name} launched · ${launchedRunId}`, "info");
       return launchedRunId;
+    } catch (error) {
+      teamBinding?.revoke();
+      if (runId) teamTokenRevokers.delete(runId);
+      throw error;
     } finally {
       pendingRunReceipts -= 1;
       if (runId) earlyCompletions.delete(runId);
@@ -330,8 +397,11 @@ export default function piBotExtension(pi: ExtensionAPI) {
     bot: BotProfile,
     task: string,
     runtimeTask: string,
-  ): Promise<void> => {
-    if (!ctx || !workspace) return;
+    delegation?: { actorId: string; summary: string },
+  ): Promise<string | undefined> => {
+    if (!ctx || !workspace) return undefined;
+    if ((bot.status ?? "active") !== "active")
+      throw new Error(`${bot.name} is archived.`);
     const conversation = workspace.conversations.find(
       (item) => item.id === threadId,
     );
@@ -352,12 +422,14 @@ export default function piBotExtension(pi: ExtensionAPI) {
     const cwd = ctx.cwd;
     const responseId = randomUUID();
     const responsePath = await prepareConversationResponse(cwd, responseId);
+    const teamBinding = await issueTeamBinding(bot);
     const spawn = (message: string) =>
       client.spawn({
         agent: runtimeAgentName(projectPath, bot.id),
         task: message,
         cwd,
         output: responsePath,
+        ...(teamBinding ? { extensionBindings: teamBinding.bindings } : {}),
       });
     const lastUserIndex = conversation.messages.findLastIndex(
       (message) => message.author === "user",
@@ -382,11 +454,20 @@ export default function piBotExtension(pi: ExtensionAPI) {
     pendingRunReceipts += 1;
     let runId: string | undefined;
     try {
-      runId =
-        previousRunId && (await client.resumeAvailable(previousRunId))
-          ? await client.resume(previousRunId, runtimeTask, responsePath)
-          : await spawn(storedContext ? historyTask : runtimeTask);
+      const canResume =
+        !bot.management?.enabled &&
+        previousRunId &&
+        (await client.resumeAvailable(previousRunId));
+      runId = canResume
+        ? await client.resume(
+            previousRunId,
+            runtimeTask,
+            responsePath,
+            teamBinding?.bindings,
+          )
+        : await spawn(storedContext ? historyTask : runtimeTask);
       const launchedRunId = runId;
+      if (teamBinding) teamTokenRevokers.set(launchedRunId, teamBinding.revoke);
       pendingResponseIds.set(launchedRunId, responseId);
       const now = new Date().toISOString();
       let earlyCompletion: CompletionEvent | undefined;
@@ -426,9 +507,21 @@ export default function piBotExtension(pi: ExtensionAPI) {
             createdAt: now,
             updatedAt: now,
           });
+          if (delegation) {
+            candidate.teamAudit.push({
+              id: randomUUID(),
+              actorId: delegation.actorId,
+              action: "delegate",
+              targetId: bot.id,
+              summary: delegation.summary.slice(0, 500),
+              createdAt: now,
+            });
+            candidate.teamAudit = candidate.teamAudit.slice(-500);
+          }
           earlyCompletions.delete(launchedRunId);
         });
         if (earlyCompletion) await handleCompletion(earlyCompletion);
+        return launchedRunId;
       } catch (error) {
         try {
           await client.stop(launchedRunId);
@@ -440,7 +533,11 @@ export default function piBotExtension(pi: ExtensionAPI) {
         throw error;
       }
     } catch (error) {
-      if (runId) pendingResponseIds.delete(runId);
+      teamBinding?.revoke();
+      if (runId) {
+        teamTokenRevokers.delete(runId);
+        pendingResponseIds.delete(runId);
+      }
       await removeConversationResponse(cwd, responseId);
       throw error;
     } finally {
@@ -453,8 +550,10 @@ export default function piBotExtension(pi: ExtensionAPI) {
     kind: ConversationKind,
     targetId: string,
     input: string,
-  ): Promise<void> => {
-    if (!ctx || !workspace) return;
+    autonomousActorId?: string,
+  ): Promise<string | undefined> => {
+    if (!ctx || !workspace) return undefined;
+    await expireTemporaryBots();
     const content = input.trim();
     if (!content) return;
     if (content.length > MAX_TASK_LENGTH)
@@ -469,6 +568,8 @@ export default function piBotExtension(pi: ExtensionAPI) {
         ? workspace.channels.find((item) => item.id === targetId)
         : undefined;
     if (kind === "bot" && !bot) throw new Error(`Unknown bot: ${targetId}`);
+    if (bot && (bot.status ?? "active") !== "active")
+      throw new Error(`${bot.name} is archived.`);
     if (kind === "channel" && !channel)
       throw new Error(`Unknown channel: ${targetId}`);
     const recipients = bot
@@ -481,14 +582,17 @@ export default function piBotExtension(pi: ExtensionAPI) {
       targetId,
       recipients,
     );
-    if (busy.length > 0)
+    const reserved = recipients.filter((recipient) =>
+      pendingConversationBots.has(recipient.id),
+    );
+    if (busy.length > 0 || reserved.length > 0)
       throw new Error(
-        `Wait for the current reply from: ${busy.map((recipient) => recipient.name).join(", ")}.`,
+        `Wait for the current reply from: ${[...busy, ...reserved].map((recipient) => recipient.name).join(", ")}.`,
       );
     const elevated = recipients.filter(
       (recipient) => classifyAuthority(recipient.tools) === "elevated",
     );
-    if (elevated.length > 0) {
+    if (elevated.length > 0 && !autonomousActorId) {
       const confirmed = await ctx.ui.confirm(
         "Send message to bots with elevated tools?",
         elevated.map((recipient) => recipient.name).join(", "),
@@ -496,61 +600,157 @@ export default function piBotExtension(pi: ExtensionAPI) {
       if (!confirmed) return;
     }
 
-    const now = new Date().toISOString();
-    const threadId = conversationId(kind, targetId);
-    await mutateWorkspace((candidate) => {
-      const conversation = ensureConversation(candidate, kind, targetId, now);
-      conversation.messages.push({
-        id: randomUUID(),
-        author: "user",
-        content,
-        status: "completed",
-        createdAt: now,
-      });
-      conversation.updatedAt = now;
-    });
-    if (recipients.length === 0) {
-      ctx.ui.notify(
-        "Message saved. No bots are assigned to this channel.",
-        "info",
-      );
-      return;
-    }
-
-    const runtimeTask = channel
-      ? channelTask(channel.name, recipients.length, content)
-      : content;
-    for (const recipient of recipients) {
-      try {
-        await launchConversationReply(
-          threadId,
-          recipient,
+    for (const recipient of recipients)
+      pendingConversationBots.add(recipient.id);
+    try {
+      const now = new Date().toISOString();
+      const threadId = conversationId(kind, targetId);
+      await mutateWorkspace((candidate) => {
+        const conversation = ensureConversation(candidate, kind, targetId, now);
+        conversation.messages.push({
+          id: randomUUID(),
+          author: "user",
           content,
-          runtimeTask,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const failedAt = new Date().toISOString();
-        await mutateWorkspace((candidate) => {
-          const conversation = ensureConversation(
-            candidate,
-            kind,
-            targetId,
-            failedAt,
-          );
-          conversation.messages.push({
-            id: randomUUID(),
-            author: "bot",
-            botId: recipient.id,
-            content: message,
-            status: "failed",
-            createdAt: failedAt,
-          });
-          conversation.updatedAt = failedAt;
+          status: "completed",
+          createdAt: now,
         });
-        ctx.ui.notify(`${recipient.name}: ${message}`, "error");
+        conversation.updatedAt = now;
+      });
+      if (recipients.length === 0) {
+        ctx.ui.notify(
+          "Message saved. No bots are assigned to this channel.",
+          "info",
+        );
+        return undefined;
       }
+
+      const runtimeTask = channel
+        ? channelTask(channel.name, recipients.length, content)
+        : content;
+      let lastRunId: string | undefined;
+      for (const recipient of recipients) {
+        try {
+          lastRunId = await launchConversationReply(
+            threadId,
+            recipient,
+            content,
+            runtimeTask,
+            autonomousActorId
+              ? { actorId: autonomousActorId, summary: input }
+              : undefined,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const failedAt = new Date().toISOString();
+          await mutateWorkspace((candidate) => {
+            const conversation = ensureConversation(
+              candidate,
+              kind,
+              targetId,
+              failedAt,
+            );
+            conversation.messages.push({
+              id: randomUUID(),
+              author: "bot",
+              botId: recipient.id,
+              content: message,
+              status: "failed",
+              createdAt: failedAt,
+            });
+            conversation.updatedAt = failedAt;
+          });
+          ctx.ui.notify(`${recipient.name}: ${message}`, "error");
+        }
+      }
+      return lastRunId;
+    } finally {
+      for (const recipient of recipients)
+        pendingConversationBots.delete(recipient.id);
     }
+  };
+
+  handleTeamControl = async (actorId, request) => {
+    if (!ctx || !workspace) throw new Error("Pi Bot has no active workspace.");
+    await expireTemporaryBots();
+    const currentContext = ctx;
+    if (request.action === "inspect") {
+      const details = inspectTeam(workspace, actorId);
+      return { text: JSON.stringify(details, null, 2), details };
+    }
+    if (request.action === "catalog") {
+      const actor = workspace.bots.find((bot) => bot.id === actorId);
+      if (
+        !actor?.management?.enabled ||
+        (actor.status ?? "active") !== "active"
+      )
+        throw new Error("Team actor cannot access the model catalog.");
+      const management = actor.management;
+      const params = (request.params ?? {}) as {
+        provider?: string;
+        query?: string;
+        page?: number;
+      };
+      const page = Math.max(1, Math.floor(params.page ?? 1));
+      const query = params.query?.toLowerCase().trim();
+      const models = selectableBotModels(currentContext).filter(
+        (model) =>
+          management.allowedProviders.includes(model.provider) &&
+          (!params.provider || model.provider === params.provider) &&
+          (!query || `${model.id} ${model.name}`.toLowerCase().includes(query)),
+      );
+      const entries = models.slice((page - 1) * 10, page * 10).map((model) => ({
+        model: botModelKey(model),
+        efforts: supportedBotThinkingLevels(model).filter(
+          (level) =>
+            THINKING_LEVELS.indexOf(level) <=
+            THINKING_LEVELS.indexOf(management.maxThinking),
+        ),
+      }));
+      const details = {
+        page,
+        pages: Math.max(1, Math.ceil(models.length / 10)),
+        entries,
+      };
+      return { text: JSON.stringify(details, null, 2), details };
+    }
+    if (request.action === "change") {
+      let result: { targetId: string; summary: string } | undefined;
+      await mutateWorkspace((candidate) => {
+        result = applyTeamChange(
+          candidate,
+          currentContext,
+          actorId,
+          request.params as TeamChangeRequest,
+        );
+      });
+      return { text: result?.summary ?? "Team changed.", details: result };
+    }
+    const params = request.params as { botId?: string; task?: string };
+    if (!params.botId || !params.task)
+      throw new Error("team_delegate requires botId and task.");
+    const task = params.task;
+    const actor = workspace.bots.find((bot) => bot.id === actorId);
+    if (
+      !actor?.management?.enabled ||
+      (actor.status ?? "active") !== "active" ||
+      !descendantIds(workspace, actorId).has(params.botId)
+    )
+      throw new Error("Managers can delegate only to descendants.");
+    const target = workspace.bots.find((bot) => bot.id === params.botId);
+    if (!target || (target.status ?? "active") !== "active")
+      throw new Error("Delegate target is not active.");
+    const runId = await sendConversationMessage(
+      "bot",
+      target.id,
+      `[Delegated by ${actor.name}] ${task}`,
+      actorId,
+    );
+    if (!runId) throw new Error("Delegated task did not launch.");
+    return {
+      text: `Delegated to ${target.name}. Run: ${runId}`,
+      details: { runId, botId: target.id },
+    };
   };
 
   const openConversation = async (
@@ -587,7 +787,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
         ? workspace.bots.filter((item) => item.channelIds.includes(channel.id))
         : [];
       const subtitle = bot
-        ? `${bot.role} · ${bot.description}`
+        ? `${bot.role} · ${bot.description} · ${bot.status ?? "active"} · ${bot.parentId ? `reports to @${bot.parentId}` : "root"}${bot.groupId ? ` · group ${bot.groupId}` : ""}${bot.management?.enabled ? " · manager" : ""}`
         : `${channel?.topic ?? ""}${assigned.length ? ` · ${assigned.map((item) => `@${item.id}`).join(", ")}` : " · no bots assigned"}`;
       const botNames = new Map(
         workspace.bots.map((item) => [item.id, item.name]),
@@ -696,6 +896,9 @@ export default function piBotExtension(pi: ExtensionAPI) {
         `Could not save completion for ${event.runId}: ${error instanceof Error ? error.message : String(error)}`,
         "error",
       );
+    } finally {
+      teamTokenRevokers.get(event.runId)?.();
+      teamTokenRevokers.delete(event.runId);
     }
   };
 
@@ -727,6 +930,8 @@ export default function piBotExtension(pi: ExtensionAPI) {
             workspace.bots.find((bot) => bot.id === action.botId),
           );
         else if (action.type === "delete-bot") await deleteBot(action.botId);
+        else if (action.type === "restore-bot")
+          await restoreArchivedBot(action.botId);
         else if (action.type === "create-channel") await createChannel();
         else if (action.type === "run-bot") await runBot(action.botId);
         else if (action.type === "inspect-bot")
@@ -761,7 +966,22 @@ export default function piBotExtension(pi: ExtensionAPI) {
       updateSurface();
       return;
     }
-    if (workspace?.bots.length) {
+    let profilesPublished = false;
+    if (workspace) {
+      const candidate = cloneWorkspace(workspace);
+      if (archiveExpiredBots(candidate).length > 0) {
+        try {
+          await persistWorkspace(candidate);
+          profilesPublished = true;
+        } catch (error) {
+          context.ui.notify(
+            `Pi Bot could not archive expired bots safely: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          );
+        }
+      }
+    }
+    if (workspace?.bots.length && !profilesPublished) {
       try {
         await publishWorkspaceAgents(workspace);
       } catch (error) {
@@ -833,6 +1053,9 @@ export default function piBotExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     await mutationQueue;
+    await teamBridge.close();
+    for (const revoke of teamTokenRevokers.values()) revoke();
+    teamTokenRevokers.clear();
     ctx?.ui.setStatus(WIDGET_KEY, undefined);
     ctx?.ui.setWidget(WIDGET_KEY, undefined);
     client.dispose();
