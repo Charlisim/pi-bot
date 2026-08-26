@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 — 2026-08-26
+
+- Add left and right navigation between dashboard columns.
+- Add row selection for channels and recent runs.
+- Add direct run inspection from the dashboard and `/pi-bot inspect`.
+
 ## 0.1.0 — 2026-08-26
 
 - Add first-run onboarding with no default agents.

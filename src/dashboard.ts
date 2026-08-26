@@ -5,15 +5,17 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { classifyAuthority } from "./tools.ts";
-import type { BotProfile, WorkspaceSnapshot } from "./types.ts";
+import type { BotProfile, RunRecord, WorkspaceSnapshot } from "./types.ts";
 
 export type DashboardAction =
   | { type: "create-bot" }
   | { type: "edit-bot"; botId: string }
   | { type: "delete-bot"; botId: string }
   | { type: "run-bot"; botId: string }
+  | { type: "inspect-run"; runId: string }
   | { type: "create-channel" }
   | { type: "close" };
 
@@ -55,16 +57,50 @@ function botRow(
   );
 }
 
-function botWindow(
-  bots: readonly BotProfile[],
+type DashboardColumn = "bots" | "channels" | "runs";
+
+function itemWindow<T>(
+  items: readonly T[],
   selected: number,
   limit: number,
-): { start: number; bots: readonly BotProfile[] } {
+): { start: number; items: readonly T[] } {
   const start = Math.min(
     Math.max(0, selected - limit + 1),
-    Math.max(0, bots.length - limit),
+    Math.max(0, items.length - limit),
   );
-  return { start, bots: bots.slice(start, start + limit) };
+  return { start, items: items.slice(start, start + limit) };
+}
+
+function panelTitle(
+  label: string,
+  column: DashboardColumn,
+  selectedColumn: DashboardColumn,
+  theme: Theme,
+): string {
+  return selectedColumn === column
+    ? theme.fg("accent", theme.bold(label))
+    : theme.fg("muted", label);
+}
+
+function channelRow(name: string, selected: boolean, theme: Theme): string {
+  return `${selected ? theme.fg("accent", ">") : " "} # ${selected ? theme.fg("accent", theme.bold(name)) : name}`;
+}
+
+function runRow(
+  run: RunRecord,
+  botName: string,
+  selected: boolean,
+  theme: Theme,
+): string {
+  const status = theme.fg(
+    run.status === "failed"
+      ? "error"
+      : run.status === "completed"
+        ? "success"
+        : "warning",
+    run.status,
+  );
+  return `${selected ? theme.fg("accent", ">") : " "} ${status}  ${botName}`;
 }
 
 export function renderDashboard(
@@ -72,6 +108,9 @@ export function renderDashboard(
   width: number,
   selectedBot = 0,
   theme?: Theme,
+  selectedColumn: DashboardColumn = "bots",
+  selectedChannel = 0,
+  selectedRun = 0,
 ): string[] {
   const paint =
     theme ??
@@ -80,14 +119,27 @@ export function renderDashboard(
       bold: (text: string) => text,
     } as Theme);
   if (width < 40) {
-    const selected = snapshot.workspace.bots[selectedBot];
+    const recentRuns = [...snapshot.workspace.runs].reverse();
+    const bot = snapshot.workspace.bots[selectedBot];
+    const channel = snapshot.workspace.channels[selectedChannel];
+    const run = recentRuns[selectedRun];
+    const selected =
+      selectedColumn === "bots"
+        ? bot
+          ? `> ${bot.name} · ${bot.role}`
+          : "> No bots"
+        : selectedColumn === "channels"
+          ? channel
+            ? `> #${channel.name}`
+            : "> No channels"
+          : run
+            ? `> ${run.status} · ${run.id.slice(0, 8)}`
+            : "> No runs";
     return [
       paint.fg("accent", paint.bold("π·bot")),
       `${snapshot.workspace.bots.length} bots · ${snapshot.workspace.runs.length} runs`,
-      selected
-        ? `> ${selected.name} · ${selected.role}`
-        : "No bots yet. Press A to create one.",
-      "A new · R run · Esc close",
+      selected,
+      "←→ panel · ↑↓ select · Enter open",
     ].map((line) => truncateToWidth(line, Math.max(1, width), "…"));
   }
   const inner = Math.max(1, width - 2);
@@ -103,49 +155,68 @@ export function renderDashboard(
   const stats = `│${pad(` ${count(snapshot.workspace.bots.length, "bot")}   ${count(snapshot.workspace.channels.length, "channel")}   ${count(snapshot.workspace.runs.length, "run")}`, inner)}│`;
   const divider = `├${"─".repeat(inner)}┤`;
 
-  if (snapshot.workspace.bots.length === 0) {
-    return [
-      top,
-      header,
-      stats,
-      divider,
-      `│${pad("", inner)}│`,
-      `│${pad(` ${paint.fg("accent", paint.bold("Your agent desk is empty."))}`, inner)}│`,
-      `│${pad(" Pi Bot installs no default agents and runs nothing until you create one.", inner)}│`,
-      `│${pad("", inner)}│`,
-      `│${pad(` ${paint.fg("accent", "[A]")} Create your first bot    ${paint.fg("muted", "[C] channel  [Esc] close")}`, inner)}│`,
-      `│${pad("", inner)}│`,
-      bottom,
-    ];
-  }
-
   if (width < 92) {
-    const window = botWindow(snapshot.workspace.bots, selectedBot, 8);
-    const rows = window.bots.map(
-      (bot, index) =>
-        `│${pad(` ${botRow(bot, window.start + index === selectedBot, paint, inner - 2)}`, inner)}│`,
+    const bots = itemWindow(snapshot.workspace.bots, selectedBot, 4);
+    const channels = itemWindow(
+      snapshot.workspace.channels,
+      selectedChannel,
+      3,
     );
-    const recent = snapshot.workspace.runs
-      .slice(-3)
-      .reverse()
-      .map((run) => {
-        const bot = snapshot.workspace.bots.find(
-          (candidate) => candidate.id === run.botId,
-        );
-        return `│${pad(` ${paint.fg(run.status === "failed" ? "error" : run.status === "completed" ? "success" : "warning", run.status.padEnd(9))} ${bot?.name ?? run.botId}`, inner)}│`;
-      });
+    const recentRuns = [...snapshot.workspace.runs].reverse();
+    const runs = itemWindow(recentRuns, selectedRun, 3);
+    const framed = (text: string) => `│${pad(` ${text}`, inner)}│`;
     return [
       top,
       header,
       stats,
       divider,
-      `│${pad(` ${paint.fg("muted", "BOTS")}`, inner)}│`,
-      ...rows,
-      `│${pad("", inner)}│`,
-      `│${pad(` ${paint.fg("muted", "RECENT RUNS")}`, inner)}│`,
-      ...(recent.length > 0 ? recent : [`│${pad(" No runs yet.", inner)}│`]),
+      framed(panelTitle("BOTS", "bots", selectedColumn, paint)),
+      ...(bots.items.length
+        ? bots.items.map((bot, index) =>
+            framed(
+              botRow(
+                bot,
+                selectedColumn === "bots" && bots.start + index === selectedBot,
+                paint,
+                inner - 2,
+              ),
+            ),
+          )
+        : [
+            framed("Your agent desk is empty."),
+            framed("Pi Bot installs no default agents. Press A to create one."),
+          ]),
+      framed(panelTitle("CHANNELS", "channels", selectedColumn, paint)),
+      ...(channels.items.length
+        ? channels.items.map((channel, index) =>
+            framed(
+              channelRow(
+                channel.name,
+                selectedColumn === "channels" &&
+                  channels.start + index === selectedChannel,
+                paint,
+              ),
+            ),
+          )
+        : [framed("No channels yet.")]),
+      framed(panelTitle("RECENT RUNS", "runs", selectedColumn, paint)),
+      ...(runs.items.length
+        ? runs.items.map((run, index) => {
+            const bot = snapshot.workspace.bots.find(
+              (candidate) => candidate.id === run.botId,
+            );
+            return framed(
+              runRow(
+                run,
+                bot?.name ?? run.botId,
+                selectedColumn === "runs" && runs.start + index === selectedRun,
+                paint,
+              ),
+            );
+          })
+        : [framed("No runs yet.")]),
       divider,
-      `│${pad(` ${paint.fg("accent", "[A]")} new  [R] run  [E] edit  [D] delete  [C] channel  [Esc] close`, inner)}│`,
+      framed("[←→] panel  [↑↓] select  [Enter] open run  [Esc] close"),
       bottom,
     ];
   }
@@ -157,10 +228,13 @@ export function renderDashboard(
   const rightWidth = available - leftWidth - middleWidth;
   const widths: [number, number, number] = [leftWidth, middleWidth, rightWidth];
   const panelDivider = `├${"─".repeat(leftWidth)}┼${"─".repeat(middleWidth)}┼${"─".repeat(rightWidth)}┤`;
-  const window = botWindow(snapshot.workspace.bots, selectedBot, 9);
-  const botRows = window.bots;
-  const channelRows = snapshot.workspace.channels.slice(0, 9);
-  const runRows = snapshot.workspace.runs.slice(-9).reverse();
+  const bots = itemWindow(snapshot.workspace.bots, selectedBot, 9);
+  const channels = itemWindow(snapshot.workspace.channels, selectedChannel, 9);
+  const recentRuns = [...snapshot.workspace.runs].reverse();
+  const runs = itemWindow(recentRuns, selectedRun, 9);
+  const botRows = bots.items;
+  const channelRows = channels.items;
+  const runRows = runs.items;
   const rowCount = Math.max(
     6,
     botRows.length,
@@ -175,14 +249,39 @@ export function renderDashboard(
     const runBot = run
       ? snapshot.workspace.bots.find((candidate) => candidate.id === run.botId)
       : undefined;
+    const emptyBotMessage =
+      snapshot.workspace.bots.length === 0
+        ? index === 0
+          ? " Your agent desk is empty."
+          : index === 1
+            ? " Pi Bot installs no default agents. Press A to create one."
+            : ""
+        : "";
     rows.push(
       line(
         bot
-          ? ` ${botRow(bot, window.start + index === selectedBot, paint, leftWidth - 2)}`
+          ? ` ${botRow(
+              bot,
+              selectedColumn === "bots" && bots.start + index === selectedBot,
+              paint,
+              leftWidth - 2,
+            )}`
+          : emptyBotMessage,
+        channel
+          ? ` ${channelRow(
+              channel.name,
+              selectedColumn === "channels" &&
+                channels.start + index === selectedChannel,
+              paint,
+            )}`
           : "",
-        channel ? ` # ${channel.name}` : "",
         run
-          ? ` ${paint.fg(run.status === "failed" ? "error" : run.status === "completed" ? "success" : "warning", run.status)}  ${runBot?.name ?? run.botId}`
+          ? ` ${runRow(
+              run,
+              runBot?.name ?? run.botId,
+              selectedColumn === "runs" && runs.start + index === selectedRun,
+              paint,
+            )}`
           : "",
         widths,
       ),
@@ -194,9 +293,9 @@ export function renderDashboard(
     stats,
     panelDivider,
     line(
-      ` ${paint.fg("muted", "BOTS")}`,
-      ` ${paint.fg("muted", "CHANNELS")}`,
-      ` ${paint.fg("muted", "RECENT RUNS")}`,
+      ` ${panelTitle("BOTS", "bots", selectedColumn, paint)}`,
+      ` ${panelTitle("CHANNELS", "channels", selectedColumn, paint)}`,
+      ` ${panelTitle("RECENT RUNS", "runs", selectedColumn, paint)}`,
       widths,
     ),
     panelDivider,
@@ -205,7 +304,7 @@ export function renderDashboard(
     line(
       ` ${paint.fg("accent", "[A]")} new  [R] run  [E] edit  [D] delete`,
       ` ${paint.fg("accent", "[C]")} new channel`,
-      " [↑↓] select  [Esc] close",
+      " [←→] panel  [↑↓] select  [Enter] open",
       widths,
     ),
     bottom,
@@ -213,7 +312,10 @@ export function renderDashboard(
 }
 
 export class Dashboard implements Component {
+  private selectedColumn: DashboardColumn = "bots";
   private selectedBot = 0;
+  private selectedChannel = 0;
+  private selectedRun = 0;
   private readonly snapshot: WorkspaceSnapshot;
   private readonly theme: Theme;
   private readonly onAction: (action: DashboardAction) => void;
@@ -232,20 +334,46 @@ export class Dashboard implements Component {
   }
 
   render(width: number): string[] {
-    return renderDashboard(this.snapshot, width, this.selectedBot, this.theme);
+    return renderDashboard(
+      this.snapshot,
+      width,
+      this.selectedBot,
+      this.theme,
+      this.selectedColumn,
+      this.selectedChannel,
+      this.selectedRun,
+    );
   }
 
   handleInput(data: string): void {
-    const count = this.snapshot.workspace.bots.length;
     const key = data.toLowerCase();
-    if ((matchesKey(data, Key.up) || data === "k") && count > 0) {
-      this.selectedBot = (this.selectedBot - 1 + count) % count;
+    const columns: DashboardColumn[] = ["bots", "channels", "runs"];
+    if (
+      matchesKey(data, Key.left) ||
+      matchesKey(data, Key.right) ||
+      data === "h" ||
+      data === "l"
+    ) {
+      const direction = matchesKey(data, Key.left) || data === "h" ? -1 : 1;
+      const current = columns.indexOf(this.selectedColumn);
+      this.selectedColumn =
+        columns[(current + direction + columns.length) % columns.length] ??
+        "bots";
       this.requestRender();
       return;
     }
+    const counts = {
+      bots: this.snapshot.workspace.bots.length,
+      channels: this.snapshot.workspace.channels.length,
+      runs: this.snapshot.workspace.runs.length,
+    };
+    const count = counts[this.selectedColumn];
+    if ((matchesKey(data, Key.up) || data === "k") && count > 0) {
+      this.moveSelection(-1, count);
+      return;
+    }
     if ((matchesKey(data, Key.down) || data === "j") && count > 0) {
-      this.selectedBot = (this.selectedBot + 1) % count;
-      this.requestRender();
+      this.moveSelection(1, count);
       return;
     }
     if (key === "a") {
@@ -260,11 +388,92 @@ export class Dashboard implements Component {
       this.onAction({ type: "close" });
       return;
     }
+    if (
+      this.selectedColumn === "runs" &&
+      (matchesKey(data, Key.enter) || key === "o")
+    ) {
+      const run = [...this.snapshot.workspace.runs].reverse()[this.selectedRun];
+      if (run) this.onAction({ type: "inspect-run", runId: run.id });
+      return;
+    }
     const bot = this.snapshot.workspace.bots[this.selectedBot];
     if (!bot) return;
     if (key === "r") this.onAction({ type: "run-bot", botId: bot.id });
     else if (key === "e") this.onAction({ type: "edit-bot", botId: bot.id });
     else if (key === "d") this.onAction({ type: "delete-bot", botId: bot.id });
+  }
+
+  private moveSelection(direction: -1 | 1, count: number): void {
+    const move = (selected: number) => (selected + direction + count) % count;
+    if (this.selectedColumn === "bots")
+      this.selectedBot = move(this.selectedBot);
+    else if (this.selectedColumn === "channels")
+      this.selectedChannel = move(this.selectedChannel);
+    else this.selectedRun = move(this.selectedRun);
+    this.requestRender();
+  }
+
+  invalidate(): void {}
+}
+
+export class RunDetails implements Component {
+  private readonly run: RunRecord;
+  private readonly botName: string;
+  private readonly runtimeDetails: string;
+  private readonly theme: Theme;
+  private readonly close: () => void;
+
+  constructor(
+    run: RunRecord,
+    botName: string,
+    runtimeDetails: string,
+    theme: Theme,
+    close: () => void,
+  ) {
+    this.run = run;
+    this.botName = botName;
+    this.runtimeDetails = runtimeDetails;
+    this.theme = theme;
+    this.close = close;
+  }
+
+  render(width: number): string[] {
+    if (width < 40)
+      return [
+        this.theme.fg("accent", this.theme.bold("RUN DETAILS")),
+        `${this.botName} · ${this.run.status}`,
+        this.run.id,
+        this.run.task,
+        "[Enter/Esc] back",
+      ].map((line) => truncateToWidth(line, Math.max(1, width), "…"));
+    const inner = width - 2;
+    const frame = (text: string) => `│${pad(` ${text}`, inner)}│`;
+    const wrapped = (text: string) =>
+      wrapTextWithAnsi(text, Math.max(1, inner - 2)).map(frame);
+    return [
+      `╭${"─".repeat(inner)}╮`,
+      frame(this.theme.fg("accent", this.theme.bold("RUN DETAILS"))),
+      frame(`${this.botName} · ${this.run.status}`),
+      frame(this.run.id),
+      `├${"─".repeat(inner)}┤`,
+      frame(this.theme.fg("muted", "TASK")),
+      ...wrapped(this.run.task),
+      frame(""),
+      frame(this.theme.fg("muted", "RUNTIME")),
+      ...wrapped(this.runtimeDetails),
+      `├${"─".repeat(inner)}┤`,
+      frame("[Enter/Esc] back"),
+      `╰${"─".repeat(inner)}╯`,
+    ];
+  }
+
+  handleInput(data: string): void {
+    if (
+      matchesKey(data, Key.enter) ||
+      matchesKey(data, Key.escape) ||
+      data.toLowerCase() === "q"
+    )
+      this.close();
   }
 
   invalidate(): void {}

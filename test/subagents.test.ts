@@ -95,6 +95,29 @@ test("status reconciliation uses the public async snapshot", async () => {
   client.dispose();
 });
 
+test("run inspection uses the public status RPC", async () => {
+  const events = new FakeEvents();
+  const client = new SubagentsClient(events);
+  events.on("subagents:rpc:v1:request", (value) => {
+    const request = value as {
+      requestId: string;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    assert.equal(request.method, "status");
+    assert.deepEqual(request.params, { id: "run-7" });
+    events.emit(`subagents:rpc:v1:reply:${request.requestId}`, {
+      version: 1,
+      requestId: request.requestId,
+      success: true,
+      data: { text: "Run run-7 · completed" },
+    });
+  });
+
+  assert.equal(await client.inspect("run-7"), "Run run-7 · completed");
+  client.dispose();
+});
+
 test("completion events correlate by run ID and tolerate extra fields", () => {
   const events = new FakeEvents();
   const client = new SubagentsClient(events);

@@ -50,6 +50,12 @@ function parseReply(value: unknown, requestId: string): RpcReply {
   return value as unknown as RpcFailure;
 }
 
+function textFromData(data: unknown): string {
+  if (!isRecord(data) || typeof data.text !== "string")
+    throw new Error("pi-subagents did not return run details.");
+  return data.text;
+}
+
 function runIdFromData(data: unknown): string {
   if (!isRecord(data))
     throw new Error("pi-subagents did not return launch details.");
@@ -160,6 +166,10 @@ export class SubagentsClient {
   ): Promise<Map<string, CompletionEvent["status"] | "launched">> {
     const data = await this.request("status", {}, timeoutMs);
     return runStatusesFromData(data);
+  }
+
+  async inspect(runId: string, timeoutMs = 5_000): Promise<string> {
+    return textFromData(await this.request("status", { id: runId }, timeoutMs));
   }
 
   async stop(runId: string, timeoutMs = 5_000): Promise<void> {

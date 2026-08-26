@@ -11,13 +11,13 @@
   <text x="34" y="124">├────────────────────────────────────────────────────┼────────────────────────────┼──────────────────────────────────┤</text>
   <text x="34" y="146">│ BOTS                                               │ CHANNELS                   │ RECENT RUNS                      │</text>
   <text x="34" y="168">├────────────────────────────────────────────────────┼────────────────────────────┼──────────────────────────────────┤</text>
-  <text x="34" y="190">│ &gt; Atlas  Product strategist  no tools              │ # general                  │ launched  Lumen                  │</text>
-  <text x="34" y="212">│   Lumen  UX researcher  advisory                   │ # product                  │ completed  Atlas                 │</text>
+  <text x="34" y="190">│ &gt; Atlas  Product strategist  no tools              │   # general                │   launched  Lumen                │</text>
+  <text x="34" y="212">│   Lumen  UX researcher  advisory                   │   # product                │   completed  Atlas               │</text>
   <text x="34" y="234">│   Forge  Implementation engineer  elevated         │                            │                                  │</text>
   <text x="34" y="256">│                                                    │                            │                                  │</text>
   <text x="34" y="278">│                                                    │                            │                                  │</text>
   <text x="34" y="300">│                                                    │                            │                                  │</text>
   <text x="34" y="322">├────────────────────────────────────────────────────┼────────────────────────────┼──────────────────────────────────┤</text>
-  <text x="34" y="344">│ [A] new  [R] run  [E] edit  [D] delete             │ [C] new channel            │ [↑↓] select  [Esc] close         │</text>
+  <text x="34" y="344">│ [A] new  [R] run  [E] edit  [D] delete             │ [C] new channel            │ [←→] panel  [↑↓] select  [Enter] [0m│</text>
   <text x="34" y="366">╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</text>
 </svg>

@@ -6,7 +6,7 @@ import type {
 import { Type } from "typebox";
 import { runtimeAgentName } from "./agent.ts";
 import { publishWorkspaceAgents, stageWorkspaceAgents } from "./agent-files.ts";
-import { Dashboard, type DashboardAction } from "./dashboard.ts";
+import { Dashboard, type DashboardAction, RunDetails } from "./dashboard.ts";
 import { loadWorkspace, saveWorkspace } from "./store.ts";
 import { type CompletionEvent, SubagentsClient } from "./subagents.ts";
 import { classifyAuthority } from "./tools.ts";
@@ -271,6 +271,29 @@ export default function piBotExtension(pi: ExtensionAPI) {
     }
   };
 
+  const inspectRun = async (runId: string) => {
+    if (!ctx || !workspace) return;
+    const run = workspace.runs.find((item) => item.id === runId);
+    if (!run) throw new Error(`Unknown run: ${runId}`);
+    const bot = workspace.bots.find((item) => item.id === run.botId);
+    let runtimeDetails: string;
+    try {
+      runtimeDetails = await client.inspect(runId);
+    } catch (error) {
+      runtimeDetails = `Live runtime details are unavailable. Saved receipt status: ${run.status}. ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (ctx.mode !== "tui") {
+      ctx.ui.notify(`${run.id}\n${run.task}\n\n${runtimeDetails}`, "info");
+      return;
+    }
+    await ctx.ui.custom<void>(
+      (_tui, theme, _keybindings, done) =>
+        new RunDetails(run, bot?.name ?? run.botId, runtimeDetails, theme, () =>
+          done(undefined),
+        ),
+    );
+  };
+
   const handleCompletion = async (event: CompletionEvent) => {
     if (!ctx) return;
     let updated = false;
@@ -337,6 +360,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
         else if (action.type === "delete-bot") await deleteBot(action.botId);
         else if (action.type === "create-channel") await createChannel();
         else if (action.type === "run-bot") await runBot(action.botId);
+        else if (action.type === "inspect-run") await inspectRun(action.runId);
       } catch (error) {
         ctx.ui.notify(
           error instanceof Error ? error.message : String(error),
@@ -426,6 +450,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
         "edit",
         "delete",
         "run",
+        "inspect",
         "channel",
       ];
       return actions
@@ -466,6 +491,9 @@ export default function piBotExtension(pi: ExtensionAPI) {
           if (!parsed.botId)
             throw new Error("Usage: /pi-bot run <bot-id> [task]");
           await runBot(parsed.botId, parsed.task);
+        } else if (command.action === "inspect") {
+          if (!command.rest) throw new Error("Usage: /pi-bot inspect <run-id>");
+          await inspectRun(command.rest);
         } else throw new Error(`Unknown Pi Bot action: ${command.action}`);
       } catch (error) {
         context.ui.notify(
