@@ -83,5 +83,5 @@ Tool authority comes from an explicit human selection. Pi Bot denies recursive o
 
 - Tool restrictions are not an OS sandbox.
 - Detached runs can outlive the owning Pi session. Startup reconciliation recovers a saved final response when the child wrote one. It keeps the receipt pending when neither a terminal status nor a response file proves completion.
-- New profiles select exact `provider/model` IDs from Pi's active or session-scoped registry. Legacy unavailable IDs fail before a task or conversation message starts.
+- New profiles select a provider and then an exact model from Pi's active or session-scoped registry. Model pages contain at most ten entries. Legacy unavailable IDs fail before a task or conversation message starts.
 - Local channels are persistent project conversations. They are not external chat transports.

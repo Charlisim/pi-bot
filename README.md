@@ -61,10 +61,11 @@ The guided flow asks for:
 3. Personality, principles, and boundaries.
 4. Operating instructions.
 5. Explicit tool authority.
-6. An exact model from Pi's active registry and a supported reasoning effort.
-7. Channel and manual activation settings.
+6. A provider from Pi's active registry.
+7. An exact model and a supported reasoning effort.
+8. Channel and manual activation settings.
 
-You review the key execution settings before the profile is saved. The model picker follows Pi's active or session-scoped model list. The effort picker shows only levels supported by that model.
+You review the key execution settings before the profile is saved. First select a provider. Then select a model from pages of at most ten entries. The picker follows Pi's active or session-scoped model list and opens on the saved or current model. The effort picker shows only levels supported by that model.
 
 ![Pi Bot empty workspace](docs/images/pi-bot-empty.svg)
 

@@ -154,6 +154,10 @@ async function chooseTools(
   }
 }
 
+const MODEL_PAGE_SIZE = 10;
+const PREVIOUS_MODELS = "← Previous 10 models";
+const NEXT_MODELS = "Next 10 models →";
+
 async function chooseModel(ctx: ExtensionContext, current?: string) {
   const models = selectableBotModels(ctx);
   if (models.length === 0) {
@@ -177,22 +181,78 @@ async function chooseModel(ctx: ExtensionContext, current?: string) {
     models.find((model) => botModelKey(model) === currentPiModel) ??
     models[0];
   if (!initial) return undefined;
-  const ordered = [initial, ...models.filter((model) => model !== initial)];
-  const byLabel = new Map(
-    ordered.map((model) => {
-      const key = botModelKey(model);
-      const name = model.name === model.id ? "" : ` — ${model.name}`;
+  const providers = [...new Set(models.map((model) => model.provider))].sort();
+  const orderedProviders = [
+    initial.provider,
+    ...providers.filter((provider) => provider !== initial.provider),
+  ];
+  const providerByLabel = new Map<string, string>(
+    orderedProviders.map((provider) => {
+      const count = models.filter(
+        (model) => model.provider === provider,
+      ).length;
       const marker =
-        key === current
+        provider === saved?.provider
           ? " (saved)"
-          : key === currentPiModel
-            ? " (current Pi model)"
+          : provider === ctx.model?.provider
+            ? " (current Pi provider)"
             : "";
-      return [`${key}${name}${marker}`, model] as const;
+      return [`${provider} · ${count} models${marker}`, provider] as const;
     }),
   );
-  const selected = await ctx.ui.select("6/7 · Model", [...byLabel.keys()]);
-  return selected ? byLabel.get(selected) : undefined;
+  const providerChoice = await ctx.ui.select("6/8 · Provider", [
+    ...providerByLabel.keys(),
+  ]);
+  if (!providerChoice) return undefined;
+  const provider = providerByLabel.get(providerChoice);
+  if (!provider) return undefined;
+  const providerModels = models.filter((model) => model.provider === provider);
+  const selectedInitial =
+    providerModels.find((model) => model === saved) ??
+    providerModels.find((model) => botModelKey(model) === currentPiModel);
+  let page = selectedInitial
+    ? Math.floor(providerModels.indexOf(selectedInitial) / MODEL_PAGE_SIZE)
+    : 0;
+  const pageCount = Math.ceil(providerModels.length / MODEL_PAGE_SIZE);
+  while (page >= 0 && page < pageCount) {
+    const pageModels = providerModels.slice(
+      page * MODEL_PAGE_SIZE,
+      (page + 1) * MODEL_PAGE_SIZE,
+    );
+    const modelByLabel = new Map(
+      pageModels.map((model) => {
+        const key = botModelKey(model);
+        const name = model.name === model.id ? "" : ` — ${model.name}`;
+        const marker =
+          key === current
+            ? " (saved)"
+            : key === currentPiModel
+              ? " (current Pi model)"
+              : "";
+        return [`${model.id}${name}${marker}`, model] as const;
+      }),
+    );
+    const options = [
+      ...modelByLabel.keys(),
+      ...(page > 0 ? [PREVIOUS_MODELS] : []),
+      ...(page + 1 < pageCount ? [NEXT_MODELS] : []),
+    ];
+    const selected = await ctx.ui.select(
+      `7/8 · Model · ${provider} · Page ${page + 1}/${pageCount}`,
+      options,
+    );
+    if (!selected) return undefined;
+    if (selected === PREVIOUS_MODELS) {
+      page -= 1;
+      continue;
+    }
+    if (selected === NEXT_MODELS) {
+      page += 1;
+      continue;
+    }
+    return modelByLabel.get(selected);
+  }
+  return undefined;
 }
 
 async function chooseThinking(
@@ -234,7 +294,7 @@ export async function runBotWizard(
 ): Promise<BotProfile | undefined> {
   const name = await askRequiredLine(
     ctx,
-    "1/7 · Bot name",
+    "1/8 · Bot name",
     "e.g. Atlas",
     80,
     existing?.name,
@@ -242,7 +302,7 @@ export async function runBotWizard(
   if (!name) return undefined;
   const role = await askRequiredLine(
     ctx,
-    "2/7 · Role — what is this bot responsible for?",
+    "2/8 · Role — what is this bot responsible for?",
     "e.g. Product strategist",
     120,
     existing?.role,
@@ -250,14 +310,14 @@ export async function runBotWizard(
   if (!role) return undefined;
   const description = await askRequiredText(
     ctx,
-    "3/7 · Purpose — one clear outcome",
+    "3/8 · Purpose — one clear outcome",
     500,
     existing?.description ?? "",
   );
   if (!description) return undefined;
   const personality = await askRequiredText(
     ctx,
-    "4/7 · Personality — how should this bot communicate?",
+    "4/8 · Personality — how should this bot communicate?",
     8_192,
     existing?.personality.summary ?? "",
   );
@@ -278,7 +338,7 @@ export async function runBotWizard(
   if (!boundaries) return undefined;
   const instructions = await askRequiredText(
     ctx,
-    "5/7 · Operating instructions",
+    "5/8 · Operating instructions",
     8_192,
     existing?.instructions ?? "",
   );
@@ -295,7 +355,7 @@ export async function runBotWizard(
       : undefined);
   const thinking = await chooseThinking(ctx, model, requestedThinking);
   if (!thinking) return undefined;
-  const channelChoice = await ctx.ui.select("7/7 · Connect to a channel", [
+  const channelChoice = await ctx.ui.select("8/8 · Connect to a channel", [
     "No channel",
     ...workspace.channels.map((channel) => `#${channel.name}`),
   ]);

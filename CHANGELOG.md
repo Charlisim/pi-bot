@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-08-26
+
+- Select a provider before selecting a bot model.
+- Limit model pages to ten entries with previous and next navigation.
+- Open the page that contains the saved or current Pi model.
+
 ## 0.2.1 — 2026-08-26
 
 - Select bot models from Pi's active model registry instead of free text.
