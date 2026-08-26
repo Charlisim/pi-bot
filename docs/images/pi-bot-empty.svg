@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="314" viewBox="0 0 1240 314" role="img" aria-label="Pi Bot empty workspace">
+  <title>Pi Bot empty workspace</title>
+  <rect width="100%" height="100%" rx="18" fill="#0b1114"/>
+  <rect x="12" y="12" width="1216" height="290" rx="12" fill="#10191d" stroke="#31515a"/>
+  <style>
+    text { fill: #d8e6e1; font: 16px 'Iosevka', 'JetBrains Mono', monospace; white-space: pre; }
+  </style>
+  <text x="34" y="58">╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</text>
+  <text x="34" y="80">│ π·bot / Acme Studio                                                                                  ● engine ready│</text>
+  <text x="34" y="102">│ 0 bots   1 channel   0 runs                                                                                        │</text>
+  <text x="34" y="124">├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤</text>
+  <text x="34" y="146">│                                                                                                                    │</text>
+  <text x="34" y="168">│ Your agent desk is empty.                                                                                          │</text>
+  <text x="34" y="190">│ Pi Bot installs no default agents and runs nothing until you create one.                                           │</text>
+  <text x="34" y="212">│                                                                                                                    │</text>
+  <text x="34" y="234">│ [A] Create your first bot    [C] channel  [Esc] close                                                              │</text>
+  <text x="34" y="256">│                                                                                                                    │</text>
+  <text x="34" y="278">╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</text>
+</svg>

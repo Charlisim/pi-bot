@@ -1,0 +1,91 @@
+{
+  "name": "pi-bot",
+  "version": "0.1.0",
+  "description": "Create and orchestrate custom AI teams inside Pi.",
+  "type": "module",
+  "packageManager": "pnpm@11.5.2",
+  "license": "MIT",
+  "author": "Carlos Simon",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Charlisim/pi-bot.git"
+  },
+  "homepage": "https://github.com/Charlisim/pi-bot#readme",
+  "bugs": {
+    "url": "https://github.com/Charlisim/pi-bot/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "ai-agents",
+    "multi-agent",
+    "tui"
+  ],
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "docs/architecture.md",
+    "docs/roadmap.md",
+    "docs/images/",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "check": "pnpm lint && pnpm build && pnpm test",
+    "evidence": "node --experimental-strip-types scripts/render-evidence.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-agent-core": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.84.3",
+    "@earendil-works/pi-ai": "0.84.3",
+    "@earendil-works/pi-coding-agent": "0.84.3",
+    "@earendil-works/pi-tui": "0.84.3",
+    "@biomejs/biome": "2.5.10",
+    "@types/node": "24.13.3",
+    "jiti": "2.7.0",
+    "pi-subagents": "0.57.0",
+    "typebox": "1.1.38",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a focused improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the problem before proposing a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Smallest useful change
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority or security impact
+      description: Does this add tools, network access, persistence, automation, or external side effects?
+    validations:
+      required: true
