@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — 2026-08-26
+
+- Refresh an open dashboard when a manager changes the team in the background.
+
 ## 0.3.0 — 2026-08-26
 
 - Add hierarchical teams with inherited management caps.

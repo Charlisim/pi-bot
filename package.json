@@ -1,6 +1,6 @@
 {
   "name": "pi-bot",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Create and orchestrate custom AI teams inside Pi.",
   "type": "module",
   "packageManager": "pnpm@11.5.2",

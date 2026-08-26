@@ -78,7 +78,7 @@ test("left and right move focus between dashboard columns", () => {
   ];
   const actions: DashboardAction[] = [];
   const dashboard = new Dashboard(
-    { workspace, engineReady: true },
+    () => ({ workspace, engineReady: true }),
     {
       fg: (_name: string, text: string) => text,
       bold: (text: string) => text,
@@ -109,6 +109,26 @@ test("left and right move focus between dashboard columns", () => {
   ]);
 });
 
+test("an open dashboard shows bots added by a background manager", () => {
+  let workspace = createWorkspace("Demo", "/tmp/demo");
+  const dashboard = new Dashboard(
+    () => ({ workspace, engineReady: true }),
+    {
+      fg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
+    } as Theme,
+    () => undefined,
+    () => undefined,
+  );
+
+  assert.match(dashboard.render(120).join("\n"), /agent desk is empty/);
+  workspace = structuredClone(workspace);
+  workspace.bots = [
+    { id: "nova", name: "Nova", role: "Engineer", tools: [] },
+  ] as never;
+  assert.match(dashboard.render(120).join("\n"), /Nova/);
+});
+
 test("retained runs stay reachable after the last bot is deleted", () => {
   const workspace = createWorkspace("Demo", "/tmp/demo");
   workspace.runs = [
@@ -123,7 +143,7 @@ test("retained runs stay reachable after the last bot is deleted", () => {
   ];
   const actions: DashboardAction[] = [];
   const dashboard = new Dashboard(
-    { workspace, engineReady: true },
+    () => ({ workspace, engineReady: true }),
     {
       fg: (_name: string, text: string) => text,
       bold: (text: string) => text,

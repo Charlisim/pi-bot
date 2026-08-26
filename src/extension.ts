@@ -63,7 +63,6 @@ import {
   type RunRecord,
   THINKING_LEVELS,
   type Workspace,
-  type WorkspaceSnapshot,
 } from "./types.ts";
 import { runBotWizard, runChannelWizard, runOnboarding } from "./wizard.ts";
 
@@ -101,6 +100,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
   let mutationQueue: Promise<void> = Promise.resolve();
   let pendingRunReceipts = 0;
   let activeConversationRender: (() => void) | undefined;
+  let activeDashboardRender: (() => void) | undefined;
   const earlyCompletions = new Map<string, CompletionEvent>();
   const pendingResponseIds = new Map<string, string>();
   const pendingConversationBots = new Set<string>();
@@ -128,6 +128,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
         ["π·bot  Your agent desk is empty. Run /pi-bot to begin."],
         { placement: "aboveEditor" },
       );
+      activeDashboardRender?.();
       return;
     }
     const activeRuns = workspace.runs.filter(
@@ -141,6 +142,7 @@ export default function piBotExtension(pi: ExtensionAPI) {
       ),
     );
     ctx.ui.setWidget(WIDGET_KEY, undefined);
+    activeDashboardRender?.();
   };
 
   const serializeMutation = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -914,14 +916,29 @@ export default function piBotExtension(pi: ExtensionAPI) {
     }
     let open = true;
     while (open && workspace) {
-      const snapshot: WorkspaceSnapshot = {
-        workspace,
-        engineReady: client.isReady(),
-      };
-      const action = await ctx.ui.custom<DashboardAction>(
-        (tui, theme, _keybindings, done) =>
-          new Dashboard(snapshot, theme, done, () => tui.requestRender()),
-      );
+      const fallbackWorkspace = workspace;
+      let dashboardRender: (() => void) | undefined;
+      let action: DashboardAction | undefined;
+      try {
+        action = await ctx.ui.custom<DashboardAction>(
+          (tui, theme, _keybindings, done) => {
+            dashboardRender = () => tui.requestRender();
+            activeDashboardRender = dashboardRender;
+            return new Dashboard(
+              () => ({
+                workspace: workspace ?? fallbackWorkspace,
+                engineReady: client.isReady(),
+              }),
+              theme,
+              done,
+              dashboardRender,
+            );
+          },
+        );
+      } finally {
+        if (activeDashboardRender === dashboardRender)
+          activeDashboardRender = undefined;
+      }
       if (!action || action.type === "close") break;
       try {
         if (action.type === "create-bot") await createBot();

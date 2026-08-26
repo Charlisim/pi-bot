@@ -29,7 +29,7 @@ Install the execution engine and Pi Bot:
 
 ```bash
 pi install npm:pi-subagents@0.57.0
-pi install git:github.com/Charlisim/pi-bot@v0.3.0
+pi install git:github.com/Charlisim/pi-bot@v0.3.1
 ```
 
 Restart Pi, or run:

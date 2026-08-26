@@ -335,18 +335,18 @@ export class Dashboard implements Component {
   private selectedBot = 0;
   private selectedChannel = 0;
   private selectedRun = 0;
-  private readonly snapshot: WorkspaceSnapshot;
+  private readonly getSnapshot: () => WorkspaceSnapshot;
   private readonly theme: Theme;
   private readonly onAction: (action: DashboardAction) => void;
   private readonly requestRender: () => void;
 
   constructor(
-    snapshot: WorkspaceSnapshot,
+    getSnapshot: () => WorkspaceSnapshot,
     theme: Theme,
     onAction: (action: DashboardAction) => void,
     requestRender: () => void,
   ) {
-    this.snapshot = snapshot;
+    this.getSnapshot = getSnapshot;
     this.theme = theme;
     this.onAction = onAction;
     this.requestRender = requestRender;
@@ -354,7 +354,7 @@ export class Dashboard implements Component {
 
   render(width: number): string[] {
     return renderDashboard(
-      this.snapshot,
+      this.getSnapshot(),
       width,
       this.selectedBot,
       this.theme,
@@ -381,10 +381,11 @@ export class Dashboard implements Component {
       this.requestRender();
       return;
     }
+    const snapshot = this.getSnapshot();
     const counts = {
-      bots: this.snapshot.workspace.bots.length,
-      channels: this.snapshot.workspace.channels.length,
-      runs: this.snapshot.workspace.runs.length,
+      bots: snapshot.workspace.bots.length,
+      channels: snapshot.workspace.channels.length,
+      runs: snapshot.workspace.runs.length,
     };
     const count = counts[this.selectedColumn];
     if ((matchesKey(data, Key.up) || data === "k") && count > 0) {
@@ -409,21 +410,19 @@ export class Dashboard implements Component {
     }
     if (matchesKey(data, Key.enter) || key === "o") {
       if (this.selectedColumn === "bots") {
-        const bot = this.snapshot.workspace.bots[this.selectedBot];
+        const bot = snapshot.workspace.bots[this.selectedBot];
         if (bot) this.onAction({ type: "inspect-bot", botId: bot.id });
       } else if (this.selectedColumn === "channels") {
-        const channel = this.snapshot.workspace.channels[this.selectedChannel];
+        const channel = snapshot.workspace.channels[this.selectedChannel];
         if (channel)
           this.onAction({ type: "inspect-channel", channelId: channel.id });
       } else {
-        const run = [...this.snapshot.workspace.runs].reverse()[
-          this.selectedRun
-        ];
+        const run = [...snapshot.workspace.runs].reverse()[this.selectedRun];
         if (run) this.onAction({ type: "inspect-run", runId: run.id });
       }
       return;
     }
-    const bot = this.snapshot.workspace.bots[this.selectedBot];
+    const bot = snapshot.workspace.bots[this.selectedBot];
     if (!bot) return;
     if (key === "r") this.onAction({ type: "run-bot", botId: bot.id });
     else if (key === "e") this.onAction({ type: "edit-bot", botId: bot.id });
