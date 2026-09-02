@@ -21,8 +21,8 @@ importers:
         specifier: 0.84.3
         version: 0.84.3(ws@8.21.3)
       '@earendil-works/pi-tui':
-        specifier: 0.84.3
-        version: 0.84.3
+        specifier: 0.84.4
+        version: 0.84.4
       '@types/node':
         specifier: 24.13.3
         version: 24.13.3
@@ -31,7 +31,7 @@ importers:
         version: 2.7.0
       pi-subagents:
         specifier: 0.57.0
-        version: 0.57.0(@earendil-works/pi-agent-core@0.84.3(ws@8.21.3))(@earendil-works/pi-ai@0.84.3(ws@8.21.3))(@earendil-works/pi-coding-agent@0.84.3(ws@8.21.3))(@earendil-works/pi-tui@0.84.3)
+        version: 0.57.0(@earendil-works/pi-agent-core@0.84.3(ws@8.21.3))(@earendil-works/pi-ai@0.84.3(ws@8.21.3))(@earendil-works/pi-coding-agent@0.84.3(ws@8.21.3))(@earendil-works/pi-tui@0.84.4)
       typebox:
         specifier: 1.1.38
         version: 1.1.38
@@ -234,8 +234,8 @@ packages:
     resolution: {integrity: sha512-sgEkWoKrvSGaKn+YfLLFZmn+/A7B/w62eLwTD57nI+C9to8ITlFFVbgC2OtwvPnT3NFGHdCd53qhBEMIlptD1g==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-tui@0.84.3':
-    resolution: {integrity: sha512-fS6OEQKEEALnKa6Uw8LcgZZ+9CWck7f3MQSCETQp6leUgIFwMEDtKmOUnL9nsYm+RIPmy7OmplVxYRbV6hiaFg==}
+  '@earendil-works/pi-tui@0.84.4':
+    resolution: {integrity: sha512-nPUnwDkLtupPXnZQYrCwPFcuTydCDqTY6ZbFqhsL4S4kVq0AT418kPa/6uXwtaCD+MjBNBltb7ScTYX65yeE1w==}
     engines: {node: '>=22.19.0'}
 
   '@google/genai@1.52.0':
@@ -985,7 +985,7 @@ snapshots:
       '@earendil-works/pi-ai': 0.84.3(ws@8.21.3)
       '@earendil-works/pi-client': 0.84.3
       '@earendil-works/pi-protocol': 0.84.3
-      '@earendil-works/pi-tui': 0.84.3
+      '@earendil-works/pi-tui': 0.84.4
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
       cross-spawn: 7.0.6
@@ -1017,7 +1017,7 @@ snapshots:
 
   '@earendil-works/pi-telemetry@0.84.3': {}
 
-  '@earendil-works/pi-tui@0.84.3':
+  '@earendil-works/pi-tui@0.84.4':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.5
@@ -1321,7 +1321,7 @@ snapshots:
 
   path-key@3.1.1: {}
 
-  pi-subagents@0.57.0(@earendil-works/pi-agent-core@0.84.3(ws@8.21.3))(@earendil-works/pi-ai@0.84.3(ws@8.21.3))(@earendil-works/pi-coding-agent@0.84.3(ws@8.21.3))(@earendil-works/pi-tui@0.84.3):
+  pi-subagents@0.57.0(@earendil-works/pi-agent-core@0.84.3(ws@8.21.3))(@earendil-works/pi-ai@0.84.3(ws@8.21.3))(@earendil-works/pi-coding-agent@0.84.3(ws@8.21.3))(@earendil-works/pi-tui@0.84.4):
     dependencies:
       acorn: 8.18.0
       jiti: 2.7.0
@@ -1331,7 +1331,7 @@ snapshots:
       '@earendil-works/pi-agent-core': 0.84.3(ws@8.21.3)
       '@earendil-works/pi-ai': 0.84.3(ws@8.21.3)
       '@earendil-works/pi-coding-agent': 0.84.3(ws@8.21.3)
-      '@earendil-works/pi-tui': 0.84.3
+      '@earendil-works/pi-tui': 0.84.4
 
   proper-lockfile@4.1.2:
     dependencies:
