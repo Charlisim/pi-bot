@@ -82,7 +82,7 @@
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-tui": "0.84.3",
     "@biomejs/biome": "2.5.10",
-    "@types/node": "24.13.3",
+    "@types/node": "26.4.0",
     "jiti": "2.7.0",
     "pi-subagents": "0.57.0",
     "typebox": "1.1.38",
